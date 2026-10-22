@@ -1,0 +1,6 @@
+# GNU Fortran regression-test profile, validated on Ubuntu 26 / GCC 15.2.
+# Preserve historical scalar rounding in the original 12 regression cases.
+# This is an opt-in reproducibility profile; loop vectorization is disabled.
+include $(AMRVAC_DIR)/arch/debug.defs
+F90FLAGS += -ffp-contract=off -fno-tree-loop-vectorize
+LINK := $(F90) $(F90FLAGS)
