@@ -86,3 +86,25 @@ the second arm. Original solver flags and tolerances remain unchanged.
 This isolates differences between these two official compiler releases under
 one runtime environment. It does not reproduce Ubuntu's downstream compiler
 patches or uniquely distinguish individual compiler optimization changes.
+
+## Packaged GCC 14.3 flag controls
+
+Run 39724452767 completed all 24 executions: both official-source GCC builds
+passed 12/12 with byte-identical output. Their outputs match previous passing
+Ubuntu groups. This does not isolate the difference from Ubuntu's GCC build,
+because hardware, MPI build, and some runtime selection differed across runs.
+The package compiler's recorded configure options include x86-64-v3.
+
+The current workflow uses a single Ubuntu 26 job and the same packaged
+GCC 14.3.0 binary, same one-time OpenMPI 5.0.10 build, and common dynamic
+library search path for three arms: default, -march=x86-64, and
+-ffp-contract=off. Each arm has an independent pristine source checkout.
+Only an external compiler wrapper appends the designated option; solver
+source, architecture files, reference logs and tolerances are unchanged.
+All compiler invocations, effective target/optimizer settings, a minimal
+multiply-add assembly probe, per-case opcode/FMA counts, and external symbols
+are recorded. Compiler/MPI hashes and per-case dynamic-library paths/hashes
+are checked across all arms. FMA counts concern emitted instructions, not
+proof that any particular instruction executed or caused the discrepancy.
+The default arm must reproduce the earlier numerical failure before a
+restored pass in another arm can be interpreted as a rescue of that failure.

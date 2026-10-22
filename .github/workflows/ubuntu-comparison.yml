@@ -1,5 +1,5 @@
 name: Ubuntu autotest comparison
-run-name: AMRVAC 3.3 — exact GCC 14.2 vs 14.3 on one Ubuntu 26 host
+run-name: AMRVAC 3.3 — GCC 14.3 default vs x86-64 vs contraction off
 
 on:
   push:
@@ -8,8 +8,7 @@ on:
       - .github/workflows/ubuntu-comparison.yml
       - .github/scripts/ubuntu_comparison.py
       - .github/scripts/build_comparison_mpi.sh
-      - .github/scripts/build_exact_gcc.sh
-      - .github/scripts/run_exact_comparison.py
+      - .github/scripts/run_flag_comparison.py
   workflow_dispatch:
 
 permissions:
@@ -18,9 +17,9 @@ permissions:
 jobs:
   compare:
     if: github.repository == 'nanami0721/amrvac_ionization'
-    name: Ubuntu 26 / exact GCC 14.2 and 14.3 / shared MPI and runtime
+    name: Ubuntu 26 / same GCC 14.3 / three flag settings
     runs-on: ubuntu-26.04
-    timeout-minutes: 300
+    timeout-minutes: 180
     env:
       ARCH: debug
       NUM_PROCS: '2'
@@ -28,45 +27,48 @@ jobs:
       HWLOC_LIBXML: '0'
       CC: gcc-14
       CXX: g++-14
+      FC: gfortran-14
     steps:
       - name: Check out experiment harness
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Check out unchanged AMRVAC for GCC 14.2
+      - name: Check out unchanged AMRVAC for default
         uses: actions/checkout@v6
         with:
           ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
-          path: source-14.2.0
+          path: source-default
           persist-credentials: false
-      - name: Check out unchanged AMRVAC for GCC 14.3
+      - name: Check out unchanged AMRVAC for x86-64
         uses: actions/checkout@v6
         with:
           ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
-          path: source-14.3.0
+          path: source-x86-64
           persist-credentials: false
-      - name: Install common build dependencies
+      - name: Check out unchanged AMRVAC for contract-off
+        uses: actions/checkout@v6
+        with:
+          ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
+          path: source-contract-off
+          persist-credentials: false
+      - name: Install one common compiler and dependencies
         run: |
           mkdir -p results
           sudo apt-get update 2>&1 | tee results/apt-update.log
-          sudo apt-get install -y gcc-14 g++-14 gfortran-14 make perl curl bzip2 xz-utils libgmp-dev libmpfr-dev libmpc-dev libisl-dev 2>&1 | tee results/apt-install.log
+          sudo apt-get install -y gcc-14 g++-14 gfortran-14 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
+          test "$(gfortran-14 -dumpfullversion)" = 14.3.0
+          gfortran-14 -v > results/package-compiler.txt 2>&1
           dpkg-query -W > results/packages.txt
           lscpu > results/cpu.txt
-          df -h > results/disk-before.txt
-      - name: Build exact official GCC releases with the same host compiler
-        run: bash .github/scripts/build_exact_gcc.sh
-      - name: Build OpenMPI once with GCC 14.2 Fortran
-        run: |
-          export FC="$RUNNER_TEMP/exact-gcc-14.2.0/bin/gfortran"
-          export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
-          bash .github/scripts/build_comparison_mpi.sh
-      - name: Run both compilers with identical MPI and runtime binaries
-        run: python3 .github/scripts/run_exact_comparison.py
+      - name: Build OpenMPI once for all three settings
+        run: bash .github/scripts/build_comparison_mpi.sh
+      - name: Compare default target, base x86-64, and disabled contraction
+        run: python3 .github/scripts/run_flag_comparison.py
       - name: Save provenance and results even after failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: exact-gcc14-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gcc14-flags-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/
           retention-days: 30
           if-no-files-found: error

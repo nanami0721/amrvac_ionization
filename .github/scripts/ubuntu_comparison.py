@@ -3,6 +3,8 @@
 import hashlib
 import json
 import os
+import re
+from collections import Counter
 from pathlib import Path
 import shutil
 import subprocess
@@ -36,6 +38,36 @@ def classify(make_rc, compare_rc, finished):
     if compare_rc is None:
         return "MISSING_OUTPUT_OR_COMPARATOR"
     return "PASS" if compare_rc == 0 else "NUMERICAL_MISMATCH"
+
+
+def instruction_audit(binary, saved):
+    """Record emitted instructions, not speculative optimizer settings."""
+    counts = Counter()
+    samples = []
+    function = None
+    fma_count = 0
+    process = subprocess.Popen(["objdump", "-d", "--no-show-raw-insn", str(binary)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in process.stdout:
+        label = re.match(r"^[0-9a-f]+ <(.+)>:", line)
+        if label:
+            function = label[1]
+        instruction = re.match(r"^\s*[0-9a-f]+:\s+(\S+)", line)
+        if not instruction:
+            continue
+        opcode = instruction[1]
+        counts[opcode] += 1
+        if re.match(r"^v(?:fmadd|fmsub|fnmadd|fnmsub)", opcode):
+            fma_count += 1
+            if len(samples) < 80:
+                samples.append(dict(function=function, instruction=line.strip()))
+    error = process.stderr.read()
+    if process.wait() != 0:
+        raise RuntimeError(f"objdump failed: {error}")
+    result = dict(binary_sha256=digest(binary), instruction_count=sum(counts.values()),
+                  fma_instruction_count=fma_count, opcode_counts=dict(sorted(counts.items())),
+                  fma_samples=samples)
+    (saved / "instruction-audit.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
 def main():
@@ -72,7 +104,7 @@ def main():
     with (output / "environment.txt").open("w") as stream:
         stream.write(f"SOURCE_SHA={sha}\n")
         for key in ("ARCH", "NUM_PROCS", "OMP_NUM_THREADS", "FC", "CC", "OMPI_FC",
-                    "EXPECTED_GCC_MAJOR", "EXPECTED_GCC_VERSION", "LD_LIBRARY_PATH", "LIBRARY_PATH", "HWLOC_LIBXML", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+                    "COMPARISON_ARM", "EXPECTED_GCC_MAJOR", "EXPECTED_GCC_VERSION", "LD_LIBRARY_PATH", "LIBRARY_PATH", "HWLOC_LIBXML", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
             stream.write(f"{key}={env.get(key, '<unset>')}\n")
         for command in commands:
             stream.write("\n$ " + " ".join(command) + "\n")
@@ -162,6 +194,9 @@ end program amrvac_compat_check
                 shutil.copy2(path, saved / destination)
         if (cwd / "amrvac").is_file():
             run(["ldd", str(cwd / "amrvac")], cwd, saved / "linked-libraries.txt")
+            if env.get("CAPTURE_INSTRUCTION_AUDIT") == "1":
+                instruction_audit(cwd / "amrvac", saved)
+                run(["nm", "-D", "--undefined-only", str(cwd / "amrvac")], cwd, saved / "external-symbols.txt")
         record = dict(directory=directory, log=name, make_returncode=rc,
                       compare_returncode=compare_rc, finished_amrvac=finished,
                       status=classify(rc, compare_rc, finished),
@@ -171,7 +206,7 @@ end program amrvac_compat_check
         (output / "results.json").write_text(json.dumps(records, indent=2) + "\n")
         print(json.dumps(record), flush=True)
     diff_rc = run(["git", "diff", "--exit-code", SOURCE_SHA], source, output / "source-diff.txt")
-    summary = [f"Source: `{sha}`", "", "| Case | Result |", "|---|---|"]
+    summary = [f"### {env.get('COMPARISON_ARM', 'Regression cases')}", "", f"Source: `{sha}`", "", "| Case | Result |", "|---|---|"]
     summary += [f"| {r['directory']}/{r['log']} | {r['status']} |" for r in records]
     summary.append(f"\nTracked source unchanged: {diff_rc == 0}\n")
     (output / "summary.md").write_text("\n".join(summary))
