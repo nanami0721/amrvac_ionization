@@ -97,7 +97,7 @@ def main():
     # A different compiler may be unable to read Ubuntu's prebuilt mpi.mod.
     # Validate the module and two-rank runtime before interpreting numerical tests.
     probe = output / "mpi-probe.f90"
-    probe.write_text("""program mpi_probe
+    probe.write_text("""program amrvac_compat_check
   use mpi
   implicit none
   integer :: ierr, rank, nproc, local_value, total
@@ -109,7 +109,7 @@ def main():
   if (nproc /= 2 .or. total /= 3) call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
   if (rank == 0) print *, 'MPI_PROBE_OK', nproc, total
   call MPI_Finalize(ierr)
-end program mpi_probe
+end program amrvac_compat_check
 """)
     binary = output / "mpi-probe"
     probe_compile = run(["mpif90", str(probe), "-o", str(binary)], output, output / "mpi-probe-build.log")
@@ -119,6 +119,9 @@ end program mpi_probe
     check.update(mpi_probe_compile=probe_compile, mpi_probe_run=probe_run)
     (output / "compiler-check.json").write_text(json.dumps(check, indent=2) + "\n")
     if probe_compile != 0 or probe_run != 0:
+        for log in ("mpi-probe-build.log", "mpi-probe-run.log"):
+            if (output / log).exists():
+                print((output / log).read_text(), flush=True)
         raise SystemExit("MPI/compiler compatibility probe failed; no regression cases run")
     print("MPI_COMPILER_PROBE_OK", flush=True)
 

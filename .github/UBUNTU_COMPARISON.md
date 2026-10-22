@@ -23,15 +23,26 @@ Ubuntu 24.04 used gfortran 13.3 and passed all twelve cases; Ubuntu 26.04 used
 gfortran 15.2 and failed all twelve numerical comparisons. Its configuration
 is preserved in commit `69171b29d768417bc2913454ae44957302ba55eb`.
 
-The current follow-up explicitly sets `OMPI_FC` and verifies `mpif90`'s actual
-compiler major version. It adds Ubuntu 24.04 / GCC 14 and Ubuntu 26.04 / GCC
-13 and 14. A small `use mpi` program checks that the selected compiler can
-read the prebuilt MPI module and run a two-rank reduction. Compatibility
-failures stop before the numerical tests and must not be counted as numerical
-mismatches. Ubuntu's MPI packages are retained, and compiler/package/CPU/image
-and linked-library versions are recorded. CPU models can vary between hosted
-jobs, and compiler minor versions can differ across Ubuntu versions; these
-remain limitations when interpreting the comparison.
+The first explicit-backend run (39716141887) ran no numerical cases:
+Ubuntu 24/GCC 14 encountered a probe name collision with MPI_Probe, and
+Ubuntu 26/GCC 13 and 14 could not read the system-provided mpi.mod format.
+
+The current follow-up fixes the probe name and builds the same OpenMPI
+5.0.10 tarball with each selected C/C++/Fortran compiler. Its SHA-256 is
+pinned from the official HTTPS download; bundled PMIx, PRRTE, hwloc and
+libevent are used. Optional UCX/libfabric/verbs/CUDA are disabled. Build
+configuration and logs are retained. No system MPI module is reused.
+The matrix includes Ubuntu 24/GCC 13,14 and Ubuntu 26/GCC 13,14,15.
+The 13/24 and 15/26 jobs bridge the earlier system-MPI baselines and check
+whether changing the MPI build changes the observed regression outcomes.
+
+Each job verifies mpif90's actual backend major version and compiles/runs
+a two-rank use-mpi reduction before the numerical cases. Compatibility
+failures are not numerical mismatches. Within each OS, compiler versions
+are varied; across OS versions, CPU models, compiler minor versions,
+glibc, and compiler runtime packages can still differ. This matrix alone
+cannot uniquely attribute a difference to the OS or compiler. The complete
+source checkout remains pinned and unchanged.
 
 The artifacts contain environment/install/build records, per-case output and
 reference logs, comparator output, SHA-256 hashes, JSON results, and a summary.
