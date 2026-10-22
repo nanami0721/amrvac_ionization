@@ -61,18 +61,18 @@ def main():
 
     commands = [
         ["uname", "-a"], ["cat", "/etc/os-release"], ["lscpu"],
-        ["gfortran", "--version"], ["gfortran-14", "--version"],
-        ["gcc-14", "--version"], ["mpif90", "--version"],
+        ["gfortran", "--version"], [env.get("FC", "gfortran"), "--version"],
+        [env.get("CC", "gcc"), "--version"], ["mpif90", "--version"],
         ["mpif90", "--showme"], ["mpif90", "--showme:command"],
         ["mpirun", "--version"], ["ompi_info", "--version"],
         ["ldd", "--version"],
-        ["dpkg-query", "-W", "gfortran*", "gcc-14*", "libgfortran*",
+        ["dpkg-query", "-W", "gfortran*", "gcc-13*", "gcc-14*", "libgfortran*",
          "openmpi*", "libopenmpi*", "libc6*", "libpmix*", "libprrte*"],
     ]
     with (output / "environment.txt").open("w") as stream:
         stream.write(f"SOURCE_SHA={sha}\n")
         for key in ("ARCH", "NUM_PROCS", "OMP_NUM_THREADS", "FC", "CC", "OMPI_FC",
-                    "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+                    "EXPECTED_GCC_MAJOR", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
             stream.write(f"{key}={env.get(key, '<unset>')}\n")
         for command in commands:
             stream.write("\n$ " + " ".join(command) + "\n")
@@ -82,6 +82,45 @@ def main():
             except FileNotFoundError:
                 rc = 127
             stream.write(f"exit_code={rc}\n")
+
+    # Check the backend actually selected by mpif90, not merely the FC variable.
+    backend = subprocess.check_output(["mpif90", "--showme:command"], env=env, text=True).strip()
+    version = subprocess.check_output(["mpif90", "-dumpfullversion"], env=env, text=True).strip()
+    expected = env.get("EXPECTED_GCC_MAJOR")
+    check = dict(backend=backend, version=version, expected_major=expected,
+                 compiler_matches=expected is None or version.split(".")[0] == expected)
+    (output / "compiler-check.json").write_text(json.dumps(check, indent=2) + "\n")
+    print("ACTUAL_COMPILER " + json.dumps(check), flush=True)
+    if not check["compiler_matches"]:
+        raise SystemExit("MPI wrapper selected the wrong compiler; no regression cases run")
+
+    # A different compiler may be unable to read Ubuntu's prebuilt mpi.mod.
+    # Validate the module and two-rank runtime before interpreting numerical tests.
+    probe = output / "mpi-probe.f90"
+    probe.write_text("""program mpi_probe
+  use mpi
+  implicit none
+  integer :: ierr, rank, nproc, local_value, total
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, nproc, ierr)
+  local_value = rank + 1
+  call MPI_Allreduce(local_value, total, 1, MPI_INTEGER, MPI_SUM, MPI_COMM_WORLD, ierr)
+  if (nproc /= 2 .or. total /= 3) call MPI_Abort(MPI_COMM_WORLD, 1, ierr)
+  if (rank == 0) print *, 'MPI_PROBE_OK', nproc, total
+  call MPI_Finalize(ierr)
+end program mpi_probe
+""")
+    binary = output / "mpi-probe"
+    probe_compile = run(["mpif90", str(probe), "-o", str(binary)], output, output / "mpi-probe-build.log")
+    probe_run = None
+    if probe_compile == 0:
+        probe_run = run(["mpirun", "-np", "2", str(binary)], output, output / "mpi-probe-run.log")
+    check.update(mpi_probe_compile=probe_compile, mpi_probe_run=probe_run)
+    (output / "compiler-check.json").write_text(json.dumps(check, indent=2) + "\n")
+    if probe_compile != 0 or probe_run != 0:
+        raise SystemExit("MPI/compiler compatibility probe failed; no regression cases run")
+    print("MPI_COMPILER_PROBE_OK", flush=True)
 
     # Build each required dimensional library separately to avoid header races.
     for dim in ("1d1", "1d3", "2d2", "3d3"):
