@@ -13,9 +13,8 @@ ROOT = Path(os.environ['GITHUB_WORKSPACE'])
 TEMP = Path(os.environ['RUNNER_TEMP'])
 OUTPUT = ROOT / 'results'
 MPI = TEMP / 'comparison-openmpi'
-ARMS = {'default': [], 'x86-64': ['-march=x86-64'],
-        'contract-off': ['-ffp-contract=off']}
-COMPILER = str(Path(shutil.which('gfortran-14')).resolve())
+ARMS = {'default': [], 'contract-off': ['-ffp-contract=off']}
+COMPILER = str(Path(shutil.which('gfortran-15')).resolve())
 
 
 def sha(path):
@@ -79,7 +78,7 @@ for name, flags in ARMS.items():
                        + 'os.execv(compiler, [compiler] + args)\n')
     wrapper.chmod(0o755)
     env = dict(os.environ, FC=str(wrapper), OMPI_FC=str(wrapper),
-               EXPECTED_GCC_MAJOR='14', EXPECTED_GCC_VERSION='14.3.0',
+               EXPECTED_GCC_MAJOR='15', EXPECTED_GCC_VERSION='15.2.0',
                LD_LIBRARY_PATH=f'{MPI}/lib:/usr/lib/x86_64-linux-gnu',
                CAPTURE_INSTRUCTION_AUDIT='1', COMPARISON_ARM=name)
     env.pop('LIBRARY_PATH', None)

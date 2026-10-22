@@ -1,5 +1,5 @@
 name: Ubuntu autotest comparison
-run-name: AMRVAC 3.3 — GCC 14.3 default vs x86-64 vs contraction off
+run-name: AMRVAC 3.3 — GCC 15.2 default vs contraction off
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
 jobs:
   compare:
     if: github.repository == 'nanami0721/amrvac_ionization'
-    name: Ubuntu 26 / same GCC 14.3 / three flag settings
+    name: Ubuntu 26 / same GCC 15.2 / two flag settings
     runs-on: ubuntu-26.04
     timeout-minutes: 180
     env:
@@ -25,9 +25,9 @@ jobs:
       NUM_PROCS: '2'
       OMP_NUM_THREADS: '1'
       HWLOC_LIBXML: '0'
-      CC: gcc-14
-      CXX: g++-14
-      FC: gfortran-14
+      CC: gcc-15
+      CXX: g++-15
+      FC: gfortran-15
     steps:
       - name: Check out experiment harness
         uses: actions/checkout@v6
@@ -39,12 +39,6 @@ jobs:
           ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
           path: source-default
           persist-credentials: false
-      - name: Check out unchanged AMRVAC for x86-64
-        uses: actions/checkout@v6
-        with:
-          ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
-          path: source-x86-64
-          persist-credentials: false
       - name: Check out unchanged AMRVAC for contract-off
         uses: actions/checkout@v6
         with:
@@ -55,20 +49,20 @@ jobs:
         run: |
           mkdir -p results
           sudo apt-get update 2>&1 | tee results/apt-update.log
-          sudo apt-get install -y gcc-14 g++-14 gfortran-14 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
-          test "$(gfortran-14 -dumpfullversion)" = 14.3.0
-          gfortran-14 -v > results/package-compiler.txt 2>&1
+          sudo apt-get install -y gcc-15 g++-15 gfortran-15 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
+          test "$(gfortran-15 -dumpfullversion)" = 15.2.0
+          gfortran-15 -v > results/package-compiler.txt 2>&1
           dpkg-query -W > results/packages.txt
           lscpu > results/cpu.txt
-      - name: Build OpenMPI once for all three settings
+      - name: Build OpenMPI once for both settings
         run: bash .github/scripts/build_comparison_mpi.sh
-      - name: Compare default target, base x86-64, and disabled contraction
+      - name: Compare default and disabled contraction
         run: python3 .github/scripts/run_flag_comparison.py
       - name: Save provenance and results even after failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gcc14-flags-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gcc15-flags-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/
           retention-days: 30
           if-no-files-found: error

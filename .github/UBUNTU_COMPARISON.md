@@ -108,3 +108,12 @@ are checked across all arms. FMA counts concern emitted instructions, not
 proof that any particular instruction executed or caused the discrepancy.
 The default arm must reproduce the earlier numerical failure before a
 restored pass in another arm can be interpreted as a rescue of that failure.
+
+## Packaged GCC 15.2 contraction control
+
+Run 39738303098 verified the GCC 14.3 default failures and both twelve-case
+rescues, with the same compiler, MPI installation, and runtime libraries.
+The next workflow repeats default versus -ffp-contract=off for packaged GCC
+15.2.0 on one Ubuntu 26 runner, retaining all controls and the pinned source.
+A separate local macOS experiment uses its existing GCC 14.2/OpenMPI 5.0.5
+with pristine default and contraction-off builds; it does not use x86 flags.
