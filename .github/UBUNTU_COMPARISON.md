@@ -49,3 +49,14 @@ reference logs, comparator output, SHA-256 hashes, JSON results, and a summary.
 They are retained for 30 days. Red jobs may represent the numerical mismatches
 being investigated; consult `summary.md` to distinguish them from build or
 runtime errors. This is a targeted twelve-case diagnostic, not the full suite.
+
+Run 39716632978 completed the Ubuntu 26 cases: GCC 13 passed 12/12;
+GCC 14 and 15 each had 12 numerical mismatches. Both Ubuntu 24 jobs
+compiled, but all cases aborted during MPI initialization with SIGFPE in
+hwloc_libxml_backend_init at topology-xml-libxml.c:363. They produced no
+numerical result. The original probe lacked AMRVAC's floating-point traps.
+
+The follow-up applies HWLOC_LIBXML=0 uniformly to use hwloc's built-in XML
+parser, preserving AMRVAC's floating-point traps. The preflight probe now
+also uses -ffpe-trap=invalid,zero and -fcheck=all. All five combinations are
+rerun to validate the workaround and maintain a common runtime setting.

@@ -72,7 +72,7 @@ def main():
     with (output / "environment.txt").open("w") as stream:
         stream.write(f"SOURCE_SHA={sha}\n")
         for key in ("ARCH", "NUM_PROCS", "OMP_NUM_THREADS", "FC", "CC", "OMPI_FC",
-                    "EXPECTED_GCC_MAJOR", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+                    "EXPECTED_GCC_MAJOR", "HWLOC_LIBXML", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
             stream.write(f"{key}={env.get(key, '<unset>')}\n")
         for command in commands:
             stream.write("\n$ " + " ".join(command) + "\n")
@@ -112,7 +112,7 @@ def main():
 end program amrvac_compat_check
 """)
     binary = output / "mpi-probe"
-    probe_compile = run(["mpif90", str(probe), "-o", str(binary)], output, output / "mpi-probe-build.log")
+    probe_compile = run(["mpif90", "-O2", "-fcheck=all", "-ffpe-trap=invalid,zero", str(probe), "-o", str(binary)], output, output / "mpi-probe-build.log")
     probe_run = None
     if probe_compile == 0:
         probe_run = run(["mpirun", "-np", "2", str(binary)], output, output / "mpi-probe-run.log")
