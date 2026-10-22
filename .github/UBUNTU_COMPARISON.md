@@ -60,3 +60,29 @@ The follow-up applies HWLOC_LIBXML=0 uniformly to use hwloc's built-in XML
 parser, preserving AMRVAC's floating-point traps. The preflight probe now
 also uses -ffpe-trap=invalid,zero and -fcheck=all. All five combinations are
 rerun to validate the workaround and maintain a common runtime setting.
+
+## Exact GCC 14.2.0 / 14.3.0 follow-up
+
+Run 39721196314 completed all 60 executions normally. Ubuntu 24 with GCC
+13.3/14.2 and Ubuntu 26 with GCC 13.4 passed all twelve; Ubuntu 26 with
+GCC 14.3/15.2 failed all twelve numerical comparisons.
+
+The current workflow replaces that matrix with one Ubuntu 26 job. It builds
+the official GCC 14.2.0 and 14.3.0 releases, verified against pinned official
+SHA-512 checksums, using the same host GCC 14, dependencies, and configuration.
+Bootstrap is disabled; only C and Fortran frontends are needed. OpenMPI 5.0.10
+is built once using GCC 14.2 Fortran and the host C/C++ compilers. Both arms
+reuse that exact installation and select their Fortran backend with OMPI_FC.
+The two source checkouts are independently pristine at the same upstream SHA.
+
+Both arms load the same Ubuntu system compiler runtimes (including libgfortran)
+through an explicit library path, retaining the same MPI prefix. The harness
+checks exact backend versions, MPI compatibility, all twelve completed cases,
+unchanged source, all MPI installation hashes, and identical paths/SHA-256
+hashes of every linked shared library for all 24 executables. Any failed audit
+invalidates the controlled comparison. Numerical mismatches alone do not skip
+the second arm. Original solver flags and tolerances remain unchanged.
+
+This isolates differences between these two official compiler releases under
+one runtime environment. It does not reproduce Ubuntu's downstream compiler
+patches or uniquely distinguish individual compiler optimization changes.

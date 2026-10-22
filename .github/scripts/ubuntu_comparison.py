@@ -72,7 +72,7 @@ def main():
     with (output / "environment.txt").open("w") as stream:
         stream.write(f"SOURCE_SHA={sha}\n")
         for key in ("ARCH", "NUM_PROCS", "OMP_NUM_THREADS", "FC", "CC", "OMPI_FC",
-                    "EXPECTED_GCC_MAJOR", "HWLOC_LIBXML", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+                    "EXPECTED_GCC_MAJOR", "EXPECTED_GCC_VERSION", "LD_LIBRARY_PATH", "LIBRARY_PATH", "HWLOC_LIBXML", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
             stream.write(f"{key}={env.get(key, '<unset>')}\n")
         for command in commands:
             stream.write("\n$ " + " ".join(command) + "\n")
@@ -87,8 +87,10 @@ def main():
     backend = subprocess.check_output(["mpif90", "--showme:command"], env=env, text=True).strip()
     version = subprocess.check_output(["mpif90", "-dumpfullversion"], env=env, text=True).strip()
     expected = env.get("EXPECTED_GCC_MAJOR")
-    check = dict(backend=backend, version=version, expected_major=expected,
-                 compiler_matches=expected is None or version.split(".")[0] == expected)
+    exact = env.get("EXPECTED_GCC_VERSION")
+    check = dict(backend=backend, version=version, expected_major=expected, expected_version=exact,
+                 compiler_matches=(expected is None or version.split(".")[0] == expected)
+                 and (exact is None or version == exact))
     (output / "compiler-check.json").write_text(json.dumps(check, indent=2) + "\n")
     print("ACTUAL_COMPILER " + json.dumps(check), flush=True)
     if not check["compiler_matches"]:
