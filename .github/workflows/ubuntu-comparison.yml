@@ -1,4 +1,5 @@
 name: Ubuntu autotest comparison
+run-name: AMRVAC 3.3 at 91f50912 — Ubuntu 24.04 vs 26.04
 
 on:
   push:
