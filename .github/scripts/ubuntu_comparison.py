@@ -28,6 +28,14 @@ CASES = [
 ]
 
 
+# Diagnostic jobs can run one case without changing the solver or test inputs.
+if os.environ.get("AMRVAC_CASE_FILTER"):
+    requested = set(os.environ["AMRVAC_CASE_FILTER"].split(","))
+    CASES = [(d, n) for d, n in CASES if d + "/" + n in requested]
+    if len(CASES) != len(requested):
+        raise SystemExit("Unknown or duplicate requested diagnostic case")
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
@@ -160,8 +168,8 @@ end program amrvac_compat_check
     print("MPI_COMPILER_PROBE_OK", flush=True)
 
     # Build each required dimensional library separately to avoid header races.
-    for dim in ("1d1", "1d3", "2d2", "3d3"):
-        rc = run(["make", "-j", "2", dim, "ARCH=debug"], source / "lib", output / f"build-{dim}.log")
+    for dim in os.environ.get("AMRVAC_BUILD_DIMS", "1d1,1d3,2d2,3d3").split(","):
+        rc = run(["make", "-j", os.environ.get("AMRVAC_BUILD_JOBS", "2"), dim, "ARCH=debug"], source / "lib", output / f"build-{dim}.log")
         if rc:
             # Preserve the failed parallel attempt; retry serially once.
             rc = run(["make", "-j", "1", dim, "ARCH=debug"], source / "lib", output / f"build-{dim}-retry.log")

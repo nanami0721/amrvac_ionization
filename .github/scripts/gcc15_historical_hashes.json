@@ -1,0 +1,30 @@
+{
+  "passing": {
+    "hd/Coleman_1D/coleman3_FI_HHe.log": "6494213c5c10fbea1884a008bf03f5238637cafa4b78f43868b0572aabb9a1aa",
+    "hd/Coleman_1D/coleman3_FI_pureH.log": "6494213c5c10fbea1884a008bf03f5238637cafa4b78f43868b0572aabb9a1aa",
+    "hd/Coleman_1D/coleman3_state_HHe.log": "01baeb7b4bdb1f82e1bd057c8ea434a143962fe464e308ee4cc00669a7b58eca",
+    "hd/Coleman_1D/coleman4_FI_HHe.log": "82e99a412d2459d26effb965dd44e372c3b0e81192988e44d69b2df24c001e66",
+    "hd/Coleman_1D/coleman4_FI_pureH.log": "82e99a412d2459d26effb965dd44e372c3b0e81192988e44d69b2df24c001e66",
+    "hd/Coleman_1D/coleman4_LTE_HHe.log": "0c7e27e74ce7e5296dfd099ab8f12f6131346231422810442a6d5bfd48eb2106",
+    "mhd/convection_2D/cv_2d_2step_tvdmu_al.log": "0dfb02aeaacbabd587b463ba2416988f2607c57a1bcd2870a1eb901228e8550c",
+    "mhd/ring_thermal_conduction_3D/rtc_3d.log": "6f9e36111cc27963278fb4107bc34b4d751a6c9501b80d2d9fe89ce8d3823eae",
+    "mhd/solar_atmosphere_3D/solar_atm_3D_3step_hll_cada_ct.log": "99007e3c35fbf3929dc527a279fc8fcd7868011f7b9acd986163758af2637bfe",
+    "mhd/solar_atmosphere_3D/solar_atm_3D_3step_hlld_cada_ct.log": "46cd1118b4d102cb702c233fdf859ac38d72dc57bf7c522b4877eeac559be007",
+    "mhd/Ambipolar1DWave/ambi.log": "51637f15be581d3b2c53e4c7676bb581a3e8332e0484d88dd9ce41927118e63d",
+    "mhd/Ambipolar1DWave-B0split/ambi.log": "ab7ab82d091bb87d00cacff137c3d5bbb409f81c66492a648373d2d9cc6e37ef"
+  },
+  "gcc15_off": {
+    "hd/Coleman_1D/coleman3_FI_HHe.log": "6494213c5c10fbea1884a008bf03f5238637cafa4b78f43868b0572aabb9a1aa",
+    "hd/Coleman_1D/coleman3_FI_pureH.log": "6494213c5c10fbea1884a008bf03f5238637cafa4b78f43868b0572aabb9a1aa",
+    "hd/Coleman_1D/coleman3_state_HHe.log": "f94732c49a3d0c9c0c276ddcbd062d21fa565e71d9d321d44ab538d5f1aafa31",
+    "hd/Coleman_1D/coleman4_FI_HHe.log": "82e99a412d2459d26effb965dd44e372c3b0e81192988e44d69b2df24c001e66",
+    "hd/Coleman_1D/coleman4_FI_pureH.log": "82e99a412d2459d26effb965dd44e372c3b0e81192988e44d69b2df24c001e66",
+    "hd/Coleman_1D/coleman4_LTE_HHe.log": "1bf16245888fd72f3bfd65dc07339d9523e087e2c21ff4708e3f4a29ebb646d3",
+    "mhd/convection_2D/cv_2d_2step_tvdmu_al.log": "e7a582fa18f2b79d361cc369d367307fd4013ce973afb60fa4ee1ae11ef9a336",
+    "mhd/ring_thermal_conduction_3D/rtc_3d.log": "6f9e36111cc27963278fb4107bc34b4d751a6c9501b80d2d9fe89ce8d3823eae",
+    "mhd/solar_atmosphere_3D/solar_atm_3D_3step_hll_cada_ct.log": "7e52c4ca9cb6bdaa676c8d0316831e4545615133b26d3b8322e0fcad051d1d87",
+    "mhd/solar_atmosphere_3D/solar_atm_3D_3step_hlld_cada_ct.log": "a255f694c7dd9ba721a179cda11f88412095f29ba45cb519dae04e27430ad2f3",
+    "mhd/Ambipolar1DWave/ambi.log": "51637f15be581d3b2c53e4c7676bb581a3e8332e0484d88dd9ce41927118e63d",
+    "mhd/Ambipolar1DWave-B0split/ambi.log": "ab7ab82d091bb87d00cacff137c3d5bbb409f81c66492a648373d2d9cc6e37ef"
+  }
+}

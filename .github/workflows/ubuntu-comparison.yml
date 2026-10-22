@@ -1,5 +1,5 @@
 name: Ubuntu autotest comparison
-run-name: AMRVAC 3.3 — GCC 15.2 default vs contraction off
+run-name: AMRVAC 3.3 — isolate GCC 15 residual after disabling FMA
 
 on:
   push:
@@ -8,7 +8,9 @@ on:
       - .github/workflows/ubuntu-comparison.yml
       - .github/scripts/ubuntu_comparison.py
       - .github/scripts/build_comparison_mpi.sh
-      - .github/scripts/run_flag_comparison.py
+      - .github/scripts/run_gcc15_residual.py
+      - .github/scripts/vector_math_scalar_probe.c
+      - .github/scripts/gcc15_historical_hashes.json
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,7 @@ permissions:
 jobs:
   compare:
     if: github.repository == 'nanami0721/amrvac_ionization'
-    name: Ubuntu 26 / same GCC 15.2 / two flag settings
+    name: Ubuntu 26 / GCC 14 vs 15 / residual diagnosis
     runs-on: ubuntu-26.04
     timeout-minutes: 180
     env:
@@ -33,36 +35,34 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Check out unchanged AMRVAC for default
+      - name: Check out unchanged source seed
         uses: actions/checkout@v6
         with:
           ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
-          path: source-default
+          path: source-seed
           persist-credentials: false
-      - name: Check out unchanged AMRVAC for contract-off
-        uses: actions/checkout@v6
-        with:
-          ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
-          path: source-contract-off
-          persist-credentials: false
-      - name: Install one common compiler and dependencies
+      - name: Install both compilers and common dependencies
         run: |
           mkdir -p results
           sudo apt-get update 2>&1 | tee results/apt-update.log
-          sudo apt-get install -y gcc-15 g++-15 gfortran-15 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
+          sudo apt-get install -y gcc-14 gfortran-14 gcc-15 g++-15 gfortran-15 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
+          test "$(gfortran-14 -dumpfullversion)" = 14.3.0
           test "$(gfortran-15 -dumpfullversion)" = 15.2.0
-          gfortran-15 -v > results/package-compiler.txt 2>&1
+          gfortran-14 -v > results/compiler14.txt 2>&1
+          gfortran-15 -v > results/compiler15.txt 2>&1
           dpkg-query -W > results/packages.txt
           lscpu > results/cpu.txt
-      - name: Build OpenMPI once for both settings
+      - name: Build one common OpenMPI installation
+        env:
+          FC: gfortran-14
         run: bash .github/scripts/build_comparison_mpi.sh
-      - name: Compare default and disabled contraction
-        run: python3 .github/scripts/run_flag_comparison.py
+      - name: Diagnose residual and validate a passing compiler configuration
+        run: python3 .github/scripts/run_gcc15_residual.py
       - name: Save provenance and results even after failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gcc15-flags-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
+          name: gcc15-residual-ubuntu26-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/
           retention-days: 30
           if-no-files-found: error
