@@ -1,0 +1,55 @@
+name: Ubuntu autotest comparison
+
+on:
+  push:
+    branches: [codex/ubuntu-autotest-comparison]
+    paths:
+      - .github/workflows/ubuntu-comparison.yml
+      - .github/scripts/ubuntu_comparison.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: github.repository == 'nanami0721/amrvac_ionization'
+    name: ${{ matrix.os }} / original MPI wrapper
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-26.04]
+    env:
+      FC: gfortran-14
+      CC: gcc-14
+      ARCH: debug
+      NUM_PROCS: '2'
+      OMP_NUM_THREADS: '1'
+    steps:
+      - name: Check out experiment harness
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check out unchanged AMRVAC 3.3
+        uses: actions/checkout@v6
+        with:
+          ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
+          path: source
+          persist-credentials: false
+      - name: Install upstream MPI dependencies
+        run: |
+          mkdir -p results
+          sudo apt-get update 2>&1 | tee results/apt-update.log
+          sudo apt-get install -y openmpi-bin libopenmpi-dev 2>&1 | tee results/apt-install.log
+      - name: Record environment and run twelve regression cases
+        run: python3 .github/scripts/ubuntu_comparison.py source results
+      - name: Save logs even when comparisons fail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: error
