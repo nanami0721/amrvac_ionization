@@ -1,0 +1,62 @@
+name: GCC 15 additional autotest controls
+run-name: GCC 15.2 — baseline x86-64 and full-suite A+B
+on:
+  push:
+    branches: [codex/ubuntu-autotest-comparison]
+    paths:
+      - .github/workflows/gcc15-extended.yml
+      - .github/scripts/run_gcc15_extended.py
+      - .github/scripts/run_gcc15_extended_cases.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare:
+    if: github.repository == 'nanami0721/amrvac_ionization'
+    name: Ubuntu 26 / GCC 15.2 / 12-case march and 535-case A+B
+    runs-on: ubuntu-26.04
+    timeout-minutes: 180
+    env:
+      ARCH: debug
+      NUM_PROCS: '2'
+      OMP_NUM_THREADS: '1'
+      HWLOC_LIBXML: '0'
+      CC: gcc-15
+      CXX: g++-15
+      FC: gfortran-15
+    steps:
+      - name: Check out experiment harness
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Check out unchanged solver source
+        uses: actions/checkout@v6
+        with:
+          ref: 91f5091258cd8948f3a189a53c1c19ee15eb1974
+          path: source-seed
+          persist-credentials: false
+      - name: Install compilers and record environment
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          sudo apt-get update 2>&1 | tee results/apt-update.log
+          sudo apt-get install -y gcc-14 gfortran-14 gcc-15 g++-15 gfortran-15 make perl curl bzip2 binutils 2>&1 | tee results/apt-install.log
+          test "$(gfortran-14 -dumpfullversion)" = 14.3.0
+          test "$(gfortran-15 -dumpfullversion)" = 15.2.0
+          gfortran-15 -v > results/compiler15.txt 2>&1
+          dpkg-query -W > results/packages.txt
+          lscpu > results/cpu.txt
+      - name: Build common OpenMPI 5.0.10 installation
+        env:
+          FC: gfortran-14
+        run: bash .github/scripts/build_comparison_mpi.sh
+      - name: Run both controls and independently audit every result
+        run: python3 .github/scripts/run_gcc15_extended.py
+      - name: Save provenance and results even after failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcc15-extended-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/
+          retention-days: 30
+          if-no-files-found: error
