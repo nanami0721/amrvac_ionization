@@ -39,7 +39,8 @@ jobs:
         run: |
           set -o pipefail
           cd tests/mhd/solar_flare_reconnection_2.5D
-          /usr/bin/time -v make -j 2 -f test.make amrvac hdr "$AMRVAC_DIR/tools/fortran/compare_logs" 2>&1 | tee "$AMRVAC_DIR/diagnostics/build.log"
+          make -f test.make hdr 2>&1 | tee "$AMRVAC_DIR/diagnostics/build.log"
+          /usr/bin/time -v make -f test.make amrvac "$AMRVAC_DIR/tools/fortran/compare_logs" 2>&1 | tee -a "$AMRVAC_DIR/diagnostics/build.log"
       - name: Run HTC with progress and resource diagnostics
         timeout-minutes: 6
         run: |
