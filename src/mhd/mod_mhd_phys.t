@@ -5629,7 +5629,8 @@ contains
   !> scaling to avoid squaring absolute field strengths or large component ratios.
   pure subroutine mhd_hyperbolic_tc_unit_vector(B,bunit)
     use mod_global_parameters, only: ndir, zero, smalldouble
-    double precision, intent(in) :: B(ndir)
+    ! Accept strided field-component slices without packing a temporary.
+    double precision, intent(in) :: B(:)
     double precision, intent(out) :: bunit(ndir)
     double precision :: scale, scaled_norm
 

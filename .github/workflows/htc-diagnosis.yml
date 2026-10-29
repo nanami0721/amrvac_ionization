@@ -18,6 +18,8 @@ jobs:
             revision: 88ab82dfae9cfffa5c3abe064ad061205521c1f2
           - label: after
             revision: 2c460fa6503650a899ebdf22b90288ed073d583c
+          - label: fixed
+            revision: codex/htc-ci-diagnosis-20261029
     env:
       FC: gfortran-14
       CC: gcc-14
@@ -63,7 +65,9 @@ jobs:
           cp run.log "$AMRVAC_DIR/diagnostics/"
           cp sfr_2.5d_mhd_hyperbolic_tc.log "$AMRVAC_DIR/diagnostics/" 2>/dev/null
           tail -30 run.log
-          cat "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
+          wc -lc "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
+          head -20 "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
+          tail -30 "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
           if [ "$result" -ne 0 ]; then exit "$result"; fi
           "$AMRVAC_DIR/tools/fortran/compare_logs" 1.0e-5 1.0e-8 sfr_2.5d_mhd_hyperbolic_tc.log correct_output/sfr_2.5d_mhd_hyperbolic_tc.log
       - name: Upload evidence
