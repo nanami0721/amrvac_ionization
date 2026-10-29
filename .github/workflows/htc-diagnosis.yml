@@ -1,0 +1,73 @@
+name: Isolated HTC diagnosis
+on:
+  push:
+    branches: [codex/htc-ci-diagnosis-20261029]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  htc:
+    name: HTC / ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: before
+            revision: 88ab82dfae9cfffa5c3abe064ad061205521c1f2
+          - label: after
+            revision: 2c460fa6503650a899ebdf22b90288ed073d583c
+    env:
+      FC: gfortran-14
+      CC: gcc-14
+      OMPI_FC: gfortran-14
+      AMRVAC_DIR: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.revision }}
+      - name: Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran-14 gcc-14 openmpi-bin libopenmpi-dev
+          mkdir -p diagnostics
+          { git rev-parse HEAD; cat /etc/os-release; gfortran-14 --version; mpif90 --showme; mpirun --version; lscpu; free -h; df -h; } > diagnostics/environment.txt
+          cat diagnostics/environment.txt
+      - name: Build only the required case
+        timeout-minutes: 25
+        run: |
+          set -o pipefail
+          cd tests/mhd/solar_flare_reconnection_2.5D
+          /usr/bin/time -v make -j 2 -f test.make amrvac hdr "$AMRVAC_DIR/tools/fortran/compare_logs" 2>&1 | tee "$AMRVAC_DIR/diagnostics/build.log"
+      - name: Run HTC with progress and resource diagnostics
+        timeout-minutes: 6
+        run: |
+          cd tests/mhd/solar_flare_reconnection_2.5D
+          (
+            while true; do
+              date -u
+              free -m
+              ps -eo pid,ppid,etime,pcpu,rss,comm --sort=-rss | head -15
+              tail -4 run.log 2>/dev/null || true
+              sleep 15
+            done
+          ) > "$AMRVAC_DIR/diagnostics/resources.log" 2>&1 &
+          monitor=$!
+          trap 'kill "$monitor" 2>/dev/null || true' EXIT
+          set +e
+          /usr/bin/time -v timeout --signal=TERM --kill-after=15s 180s mpirun -np 2 ./amrvac -i sfr_2.5d.par ../../schemes/mhd_hyperbolic_tc.par > run.log 2> "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
+          result=$?
+          echo "$result" > "$AMRVAC_DIR/diagnostics/exit-code.txt"
+          cp run.log "$AMRVAC_DIR/diagnostics/"
+          cp sfr_2.5d_mhd_hyperbolic_tc.log "$AMRVAC_DIR/diagnostics/" 2>/dev/null
+          tail -30 run.log
+          cat "$AMRVAC_DIR/diagnostics/runtime-stderr.log"
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          "$AMRVAC_DIR/tools/fortran/compare_logs" 1.0e-5 1.0e-8 sfr_2.5d_mhd_hyperbolic_tc.log correct_output/sfr_2.5d_mhd_hyperbolic_tc.log
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: htc-${{ matrix.label }}
+          path: diagnostics/
