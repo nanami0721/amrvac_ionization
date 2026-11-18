@@ -124,8 +124,10 @@ and GLM commands. No performance improvement or overset CT acceptance is claimed
 1. M1 face/edge schedules and analytic tests are implemented (see the staged
    sampling section below). Remaining M1 work: cross-resolution common masks
    for physical diagnostics and physical whole-sphere budgets.
-2. Implement M2: stage-coherent donor electric-field reconstruction, edge-integral
-   exchange, ghost-face divergence constraints and native face updates.
+2. Complete M2 integration: the explicit edge-integral exchange and angular
+   ghost-face constraint APIs are now implemented and tested below. Remaining
+   work is magnetic ghost population, duplicate-edge synchronization, radial
+   boundary intersections and integration with native face updates.
    The new opt-in `ct_stage_split` route now supplies an all-block boundary
    between edge generation and curl application. The original route remains the
    default. Exchange must use that stage boundary, never a collective inside a
@@ -137,7 +139,8 @@ and GLM commands. No performance improvement or overset CT acceptance is claimed
 5. Verify Parker wind, split-monopole wind and a controlled shock-producing event.
 
 The current GLM rejection of CT/B0 remains intentional. M0's small regression
-baseline and parts of M1/M4 are available; M2 has its prerequisite test and staged update API, but no overset edge exchange.
+baseline and parts of M1/M4 are available; M2 has the staged update API and tested explicit edge-exchange/ghost-constraint
+components. Full MHD CT evolution remains disabled.
 
 ## Face/edge schedules and analytic tests (2026-11-18)
 
@@ -195,6 +198,62 @@ system 49.589% of 64 GiB, build tree 378.797 MiB, runtime tree 379.641 MiB; no
 watchdog stop. All compilation, logs and simulation artifacts are external.
 No commit or push was performed for this increment.
 
-The next M2 task is stage-coherent electric-field reconstruction and receiving
-edge line integration, followed by divergence-compatible ghost-face closure.
-The new point-sampling table alone does not justify removing the CT rejection.
+The point-sampling table was the prerequisite for the next increment below.
+It alone did not justify removing the CT rejection.
+
+## Edge-integral exchange and ghost constraints (2026-11-18)
+
+Implemented `mod_yinyang_ct_coupling`: cached two-point Gauss integration along
+spherical receiver edges, conversion of native donor `dt*length*E` to `dt*E`,
+and theta-then-phi outward angular ghost-face flux constraints including corners.
+The latter preserves every active face and its boundary anchors, validates all
+used faces/metrics before writing and does not modify radial physical ghosts.
+
+The actual-stage-workspace adapter consists of `yy_ct_stage_plan`,
+`yy_prepare_ct_edges` and `yy_exchange_ct_edges`. It checks computed UCT stencil
+bounds, missing workspace, stale mesh epoch and incomplete donor coverage. Donors
+are all packed before receiver overwrites. The common mesh-directory helper was
+refactored and the previous face/edge table integration suite rerun successfully.
+See `tests/yinyang/ct_coupling/README.md` for contracts, equations and commands.
+
+Final evidence directories:
+
+- Analytic: `/Users/nanami/workspace/2608_uawsom/yinyang-ct-coupling-20261118-a`.
+- Native adapter: `/Users/nanami/workspace/2608_uawsom/yinyang-ct-coupling-mesh-20261118-b`.
+- Previous table regression: `/Users/nanami/workspace/2608_uawsom/yinyang-ct-coupling-table-regression-20261118`.
+
+Acceptance:
+
+- 72 analytic MPI runs (debug/optimized, midpoint/exact-line-average donors,
+  uniform/geometric radii, three refinements, 2/4/6 ranks) passed. Canonical
+  edge-integral outputs were bitwise identical across MPI sizes. Repeated calls,
+  zero dt, linear dt scaling, incomplete coverage and empty receivers passed.
+- Smooth-field line-integral errors normalized by dt and receiving arc length
+  converged at 1.880--2.109 order; fine-grid pairs were 2.080--2.109. The reference
+  uses independent 128-panel Simpson integration. Uniform Cartesian E with native
+  midpoint donors had maximum normalized error 2.08e-8 from curved-edge
+  quadrature. Exact-line-average donors have second-order midpoint-conversion
+  error; they are not claimed to preserve constant Cartesian E to roundoff.
+- All 16 angular-side flag combinations passed ghost divergence, corner,
+  idempotence, exact protected-face preservation and invalid-area atomic-failure
+  tests. Analytic spherical flux-divergence maximum was 6.69e-15.
+- 12 real AMRVAC mesh runs passed. Maximum donor-length discrepancy versus native
+  dsC: 3.47e-16; receiving-integral error versus the uniform-field two-point
+  quadrature: 8.56e-17; constrained ghost-cell native get_divb: 7.99e-15. The
+  ghost operator was applied to a separate probe state with native surfaceC and
+  volumes; it did not mutate a production MHD solution.
+- 12 previous-table regression runs passed. All six full debug dependency-library
+  configurations compiled. Successful runtime stderr was empty, including
+  repeated hot-path calls. Final source/test code hashes match retained manifests;
+  `git diff --check` and Python syntax checks passed.
+- Final-suite sampled system occupancy peaked at 54.875% of 64 GiB; build/runtime
+  process-tree RSS peaks were 123.625/219.907 MiB. No watchdog stop occurred.
+  Limits stayed at 4096/1024 MiB and system 65% start/68% stop, sampled at 0.2 s.
+  The native directory contains `final-audit.json` and per-job memory evidence.
+
+These tests qualify explicit transfer/constraint components, **not complete
+Yin–Yang MHD CT time evolution**. No callback is installed automatically. Remaining
+integration must populate magnetic ghost faces, order same-patch ghost/duplicate
+edge synchronization, handle radial-wall intersections, synchronize cell-centered
+B/energy and validate evolving fields, restart and interface convergence. The
+CT/B0 rejection remains; no commit/push was made for this increment.

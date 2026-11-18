@@ -87,3 +87,13 @@ full debug dimension libraries compiled. Three-rank staged CT restart was binary
 identical to uninterrupted evolution. Existing Yin–Yang GLM matched its retained
 baseline at 2/4 ranks. See the progress document and external `final-audit.json`
 for divergence and memory measurements. Actual Yin–Yang CT remains disabled.
+
+## Explicit Yin–Yang transfer components (2026-11-18)
+
+`yy_prepare_ct_edges` and `yy_exchange_ct_edges` now provide a caller-owned plan
+and an adapter for `ct_stage_flux%edge`. The latter is intended for this stage
+callback and packs all donors before overwriting receiver edges. It does not
+register itself. `yy_ct_close_ghosts` provides angular ghost constraints after
+magnetic ghost faces have been populated. See
+`tests/yinyang/ct_coupling/README.md` and the progress document for tested contracts
+and the still-required full-MHD integration. Yin–Yang CT remains disabled.

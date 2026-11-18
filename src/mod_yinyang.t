@@ -1,6 +1,7 @@
 !> Fixed-grid overset coupling; local spherical metrics are unchanged.
 module mod_yinyang
   use mod_yinyang_staggered, only: yy_staggered_table, yy_staggered_build
+  use mod_yinyang_ct_coupling, only: yy_ct_edge_plan, yy_ct_edge_build, yy_ct_edge_exchange
   use mod_global_parameters
   use mod_physics, only: phys_to_primitive, phys_to_conserved, physics_type
   use mod_comm_lib, only: mpistop
@@ -8,7 +9,13 @@ module mod_yinyang
   implicit none
   private
   public :: yy_validate, yy_exchange, yy_basis, yy_position, yy_checkpoint, yy_checkpoint_begin, yy_report
-  public :: yy_build_staggered_table
+  public :: yy_build_staggered_table, yy_prepare_ct_edges, yy_exchange_ct_edges, yy_ct_stage_plan
+  type yy_ct_stage_plan
+    type(yy_ct_edge_plan) :: edge
+    integer,allocatable :: receivers(:,:)
+    double precision,allocatable :: packed(:), received(:)
+    integer(kind=8) :: mesh_epoch=-1_8
+  end type
   integer(kind=8) :: epoch=-1_8
   integer :: nr=0, ns=0, nt=0, raw_nr=0
   integer(kind=8) :: exchange_calls=0_8
@@ -27,11 +34,25 @@ contains
     type(state),intent(in) :: s(max_blocks)
     integer,intent(in) :: family
     double precision,intent(in) :: points(:,:)
+    integer :: nn(3),bn(3)
+    integer,allocatable :: directory(:,:)
+    double precision,allocatable :: radial(:)
+    double precision :: angular(2,2)
+    call yy_staggered_mesh(s,bn,nn,radial,angular,directory)
+    call yy_staggered_build(table,MPI_COMM_WORLD,yy_patch,family,bn,nn,radial,angular,directory,points)
+  end subroutine
+
+  subroutine yy_staggered_mesh(s,bn,nn,rmax,angular,directory)
+    type(state),intent(in) :: s(max_blocks)
+    integer,intent(out) :: bn(3),nn(3)
+    double precision,allocatable,intent(out) :: rmax(:)
+    double precision,intent(out) :: angular(2,2)
+    integer,allocatable,intent(out) :: directory(:,:)
     {^IFTHREED
-    integer :: n,g,p,i,gi,nn(3),bn(3)
-    integer,allocatable :: local(:,:),directory(:,:),counts(:),displs(:)
-    double precision,allocatable :: lower(:),upper(:),rmin(:),rmax(:)
-    double precision :: radius,angular(2,2)
+    integer :: n,g,p,i,gi
+    integer,allocatable :: local(:,:),counts(:),displs(:)
+    double precision,allocatable :: lower(:),upper(:),rmin(:)
+    double precision :: radius
     if(.not.yinyang_enabled.or.refine_max_level/=1.or.lb_automatic) &
       call mpistop('staggered table requires fixed level-one Yin-Yang layout')
     if(stretched_dim(2).or.stretched_dim(3)) call mpistop('staggered table needs uniform angular mesh')
@@ -60,10 +81,82 @@ contains
     allocate(directory(6,sum(counts)/6))
     call MPI_ALLGATHERV(local,6*igridstail,MPI_INTEGER,directory,counts,displs,MPI_INTEGER,MPI_COMM_WORLD,ierrmpi)
     angular(:,1)=[xprobmin2,xprobmin3];angular(:,2)=[xprobmax2,xprobmax3]
-    call yy_staggered_build(table,MPI_COMM_WORLD,yy_patch,family,bn,nn,rmax,angular,directory,points)
     }
     {^IFONED call mpistop('staggered Yin-Yang table requires 3D') }
     {^IFTWOD call mpistop('staggered Yin-Yang table requires 3D') }
+  end subroutine
+
+  ! Receiver rows are local block ID, native i,j,k and direction. Select only
+  ! desired interface edges; uncomputed UCT workspace may never be a donor.
+  subroutine yy_prepare_ct_edges(plan,s,receivers)
+    type(yy_ct_stage_plan),intent(out) :: plan
+    type(state),intent(in) :: s(max_blocks)
+    integer,intent(in) :: receivers(:,:)
+    {^IFTHREED
+    integer :: nn(3),bn(3),n,g,c,idx(3),lo(3),hi(3)
+    integer,allocatable :: directory(:,:)
+    double precision,allocatable :: radial(:),centers(:,:),widths(:)
+    double precision :: angular(2,2),offset(3)
+    if(size(receivers,1)/=5) call mpistop('CT edge receiver shape must be (5,n)')
+    call yy_staggered_mesh(s,bn,nn,radial,angular,directory)
+    allocate(centers(3,size(receivers,2)),widths(size(receivers,2)))
+    do n=1,size(receivers,2)
+      g=receivers(1,n);c=receivers(5,n);idx=receivers(2:4,n)
+      if(c<1.or.c>3) call mpistop('invalid receiving edge direction')
+      if(.not.any(igrids(1:igridstail)==g)) call mpistop('receiving CT block is not local')
+      lo=[ixMlo1-1,ixMlo2-1,ixMlo3-1];hi=[ixMhi1,ixMhi2,ixMhi3];lo(c)=lo(c)+1
+      if(any(idx<lo).or.any(idx>hi)) call mpistop('receiver outside valid UCT stencil')
+      offset=0.5d0;offset(c)=0.d0
+      centers(:,n)=s(g)%x(idx(1),idx(2),idx(3),:)+offset*s(g)%dx(idx(1),idx(2),idx(3),:)
+      widths(n)=s(g)%dx(idx(1),idx(2),idx(3),c)
+    end do
+    call yy_ct_edge_build(plan%edge,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
+      centers,widths,receivers(5,:))
+    if(any(.not.plan%edge%covered)) call mpistop('CT edge lacks full donors: boundary closure required')
+    do n=1,size(plan%edge%samples%request,2)
+      idx=plan%edge%samples%request(2:4,n)+[ixMlo1,ixMlo2,ixMlo3]
+      c=plan%edge%samples%request(5,n)
+      lo=[ixMlo1-1,ixMlo2-1,ixMlo3-1];lo(c)=lo(c)+1
+      if(any(idx<lo).or.any(idx>[ixMhi1,ixMhi2,ixMhi3])) &
+        call mpistop('donor outside computed UCT edge stencil')
+    end do
+    plan%receivers=receivers
+    allocate(plan%packed(size(plan%edge%samples%request,2)),plan%received(size(receivers,2)))
+    plan%mesh_epoch=particle_mesh_epoch
+    }
+    {^IFONED call mpistop('CT edge exchange requires 3D') }
+    {^IFTWOD call mpistop('CT edge exchange requires 3D') }
+  end subroutine
+
+  ! Invoke at the all-block RK-stage boundary, before any edge is overwritten.
+  ! All requested donor integrals are packed before the collective returns.
+  subroutine yy_exchange_ct_edges(plan,fluxes)
+    type(yy_ct_stage_plan),intent(inout) :: plan
+    type(ct_stage_flux),intent(inout) :: fluxes(:)
+    {^IFTHREED
+    integer :: n,g,c,i,j,k
+    if(.not.allocated(plan%packed)) call mpistop('CT edge plan has not been built')
+    if(size(fluxes)<max_blocks) call mpistop('CT stage block array is too small')
+    if(plan%mesh_epoch/=particle_mesh_epoch) call mpistop('CT edge plan is stale')
+    do n=1,size(plan%packed)
+      g=plan%edge%samples%request(1,n);c=plan%edge%samples%request(5,n)
+      i=plan%edge%samples%request(2,n)+ixMlo1
+      j=plan%edge%samples%request(3,n)+ixMlo2
+      k=plan%edge%samples%request(4,n)+ixMlo3
+      if(.not.allocated(fluxes(g)%edge)) call mpistop('CT donor stage workspace missing')
+      plan%packed(n)=fluxes(g)%edge(i,j,k,c)
+    end do
+    call yy_ct_edge_exchange(plan%edge,plan%packed,plan%received)
+    do n=1,size(plan%received)
+      if(.not.plan%edge%covered(n)) cycle
+      g=plan%receivers(1,n);i=plan%receivers(2,n);j=plan%receivers(3,n)
+      k=plan%receivers(4,n);c=plan%receivers(5,n)
+      if(.not.allocated(fluxes(g)%edge)) call mpistop('CT receiving workspace missing')
+      fluxes(g)%edge(i,j,k,c)=plan%received(n)
+    end do
+    }
+    {^IFONED call mpistop('CT edge exchange requires 3D') }
+    {^IFTWOD call mpistop('CT edge exchange requires 3D') }
   end subroutine
 
   ! Invalidate a previous completion record BEFORE overwriting either snapshot.
