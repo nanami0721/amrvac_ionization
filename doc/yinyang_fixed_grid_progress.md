@@ -121,8 +121,9 @@ and GLM commands. No performance improvement or overset CT acceptance is claimed
 
 ## Remaining dependency order
 
-1. Finish M1: generalize cached schedules for staggered face/edge positions;
-   add cross-resolution common masks and physical whole-sphere budgets.
+1. M1 face/edge schedules and analytic tests are implemented (see the staged
+   sampling section below). Remaining M1 work: cross-resolution common masks
+   for physical diagnostics and physical whole-sphere budgets.
 2. Implement M2: stage-coherent donor electric-field reconstruction, edge-integral
    exchange, ghost-face divergence constraints and native face updates.
    The new opt-in `ct_stage_split` route now supplies an all-block boundary
@@ -137,3 +138,63 @@ and GLM commands. No performance improvement or overset CT acceptance is claimed
 
 The current GLM rejection of CT/B0 remains intentional. M0's small regression
 baseline and parts of M1/M4 are available; M2 has its prerequisite test and staged update API, but no overset edge exchange.
+
+## Face/edge schedules and analytic tests (2026-11-18)
+
+`mod_yinyang_staggered` now caches component-specific donor stencils, canonical
+block ownership, MPI routing, Cartesian reconstruction coefficients and reusable
+buffers for face-normal and edge-tangent point samples. The AMRVAC adapter
+`yy_build_staggered_table` uses the real block directory and `ps%x/ps%dx` radial
+mesh, including radial stretching. Receiver points may also be supplied directly
+for later edge quadrature. Invalid coverage is explicit; no extrapolation or
+active-face updates are performed. This API is not connected to CT evolution.
+
+See `tests/yinyang/staggered_schedule/README.md` for indexing conventions,
+reconstruction equations, rebuilding/lifetime rules and exact test commands.
+The normal-matrix normalization preserves uniform Cartesian vectors; it does
+not impose a divergence constraint or global flux conservation. Donor requests
+are currently not deduplicated, so production communication scaling is untested.
+
+Fresh analytic evidence is retained in
+`/Users/nanami/workspace/2608_uawsom/yinyang-staggered-20261118-c`.
+Debug and optimized suites each completed 36 MPI runs: face/edge x uniform/
+geometric radial spacing x three resolutions x 2/4/6 ranks. Both patches and all
+three component orientations were covered. Canonically ordered reconstructed
+outputs were bitwise identical across MPI sizes. Repeated exchange, table
+release/rebuild, empty-receiver ranks and radial/angular no-coverage masks passed.
+The uniform Cartesian field maximum error was 6.11e-16.
+
+For the smooth divergence-free analytic field `(sin(y),sin(z),sin(x))`, RMS errors
+on the staggered boundary rings/corners at `(8,16,48)`, `(16,32,96)` and
+`(32,64,192)` cells per patch were:
+
+| Sampling lattice | Radial mesh | Coarse | Medium | Fine | Orders |
+|---|---|---:|---:|---:|---|
+| Face | uniform | 2.261e-3 | 5.657e-4 | 1.385e-4 | 1.999, 2.031 |
+| Face | geometric | 2.227e-3 | 5.504e-4 | 1.339e-4 | 2.016, 2.039 |
+| Edge | uniform | 2.307e-3 | 5.702e-4 | 1.384e-4 | 2.016, 2.042 |
+| Edge | geometric | 2.265e-3 | 5.540e-4 | 1.338e-4 | 2.032, 2.050 |
+
+These are spatial reconstruction errors on mesh-associated receiver rings, not
+time-evolution errors, native discrete divB or proof of edge-integral consistency.
+One intermediate diagnostic string exceeded VACPP's line-breaking capability;
+that expansion failed before compilation. The string was shortened and the
+complete final analytic suite rerun; failed evidence remains in the `-b` folder.
+
+Final AMRVAC adapter evidence:
+`/Users/nanami/workspace/2608_uawsom/yinyang-staggered-mesh-20261118-b`.
+Twelve runs (debug/optimized x uniform/stretched x 2/4/6 ranks) each checked both
+sampling families on 192 actual mesh receiver positions. Maximum discrepancy
+between cached and native geometry/uniform-vector reconstruction was 1.56e-15.
+All six full debug dependency-library configurations passed. All successful
+simulation stderr files were empty, including repeated exchange calls.
+
+Final source/test code hashes match both retained manifests (documentation was
+updated after testing). `final-audit.json` records acceptance and memory peaks:
+system 49.589% of 64 GiB, build tree 378.797 MiB, runtime tree 379.641 MiB; no
+watchdog stop. All compilation, logs and simulation artifacts are external.
+No commit or push was performed for this increment.
+
+The next M2 task is stage-coherent electric-field reconstruction and receiving
+edge line integration, followed by divergence-compatible ghost-face closure.
+The new point-sampling table alone does not justify removing the CT rejection.

@@ -1,5 +1,6 @@
 !> Fixed-grid overset coupling; local spherical metrics are unchanged.
 module mod_yinyang
+  use mod_yinyang_staggered, only: yy_staggered_table, yy_staggered_build
   use mod_global_parameters
   use mod_physics, only: phys_to_primitive, phys_to_conserved, physics_type
   use mod_comm_lib, only: mpistop
@@ -7,6 +8,7 @@ module mod_yinyang
   implicit none
   private
   public :: yy_validate, yy_exchange, yy_basis, yy_position, yy_checkpoint, yy_checkpoint_begin, yy_report
+  public :: yy_build_staggered_table
   integer(kind=8) :: epoch=-1_8
   integer :: nr=0, ns=0, nt=0, raw_nr=0
   integer(kind=8) :: exchange_calls=0_8
@@ -17,6 +19,53 @@ module mod_yinyang
   double precision, allocatable :: sendbuf(:,:), recvbuf(:,:), scratch(:^D&,:)
   double precision :: pack_seconds=0.d0, wait_seconds=0.d0, unpack_seconds=0.d0, build_seconds=0.d0
 contains
+  ! Build an explicitly owned table from the real fixed-grid AMRVAC layout.
+  ! Caller owns its lifetime and must rebuild after mesh/ownership changes.
+  ! This does not activate CT or write state/ghost faces.
+  subroutine yy_build_staggered_table(table,s,family,points)
+    type(yy_staggered_table),intent(inout) :: table
+    type(state),intent(in) :: s(max_blocks)
+    integer,intent(in) :: family
+    double precision,intent(in) :: points(:,:)
+    {^IFTHREED
+    integer :: n,g,p,i,gi,nn(3),bn(3)
+    integer,allocatable :: local(:,:),directory(:,:),counts(:),displs(:)
+    double precision,allocatable :: lower(:),upper(:),rmin(:),rmax(:)
+    double precision :: radius,angular(2,2)
+    if(.not.yinyang_enabled.or.refine_max_level/=1.or.lb_automatic) &
+      call mpistop('staggered table requires fixed level-one Yin-Yang layout')
+    if(stretched_dim(2).or.stretched_dim(3)) call mpistop('staggered table needs uniform angular mesh')
+    nn=[domain_nx1,domain_nx2,domain_nx3];bn=[block_nx1,block_nx2,block_nx3]
+    allocate(local(6,igridstail),counts(yy_world_size),displs(yy_world_size))
+    allocate(lower(0:nn(1)),upper(0:nn(1)),rmin(0:nn(1)),rmax(0:nn(1)))
+    lower=huge(1.d0);upper=-huge(1.d0)
+    do n=1,igridstail
+      g=igrids(n)
+      local(:,n)=[node(pig1_,g)-1,node(pig2_,g)-1,node(pig3_,g)-1,g,yy_world_rank,yy_patch]
+      do i=ixMlo1-1,ixMhi1
+        gi=(node(pig1_,g)-1)*block_nx1+i-ixMlo1+1
+        radius=s(g)%x(i,ixMlo2,ixMlo3,1)+0.5d0*s(g)%dx(i,ixMlo2,ixMlo3,1)
+        lower(gi)=min(lower(gi),radius);upper(gi)=max(upper(gi),radius)
+      end do
+    end do
+    call MPI_ALLREDUCE(lower,rmin,nn(1)+1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_WORLD,ierrmpi)
+    call MPI_ALLREDUCE(upper,rmax,nn(1)+1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,ierrmpi)
+    if(any(abs(rmax-rmin)>1.d-12*max(1.d0,abs(rmax)))) &
+      call mpistop('staggered table radial meshes disagree or are incomplete')
+    call MPI_ALLGATHER(6*igridstail,1,MPI_INTEGER,counts,1,MPI_INTEGER,MPI_COMM_WORLD,ierrmpi)
+    displs(1)=0
+    do p=2,yy_world_size
+      displs(p)=displs(p-1)+counts(p-1)
+    end do
+    allocate(directory(6,sum(counts)/6))
+    call MPI_ALLGATHERV(local,6*igridstail,MPI_INTEGER,directory,counts,displs,MPI_INTEGER,MPI_COMM_WORLD,ierrmpi)
+    angular(:,1)=[xprobmin2,xprobmin3];angular(:,2)=[xprobmax2,xprobmax3]
+    call yy_staggered_build(table,MPI_COMM_WORLD,yy_patch,family,bn,nn,rmax,angular,directory,points)
+    }
+    {^IFONED call mpistop('staggered Yin-Yang table requires 3D') }
+    {^IFTWOD call mpistop('staggered Yin-Yang table requires 3D') }
+  end subroutine
+
   ! Invalidate a previous completion record BEFORE overwriting either snapshot.
   ! Called collectively on the world communicator, outside block/OpenMP loops.
   subroutine yy_checkpoint_begin(filename)
