@@ -107,7 +107,7 @@ contains
                 x2=x(ix^D,1)*sin(x(ix^D,phi_))
                 x3=x(ix^D,z_)}
                 write(*,*) "Cartesian location: ", x^D
-              case (spherical)
+              case (spherical,yinyang)
                 x1=x(ix^D,1){^NOONED*sin(x(ix^D,2))}{^IFTHREED*cos(x(ix^D,3))}
                 {^IFTWOD
                 x2=x(ix^D,1)*cos(x(ix^D,2))}

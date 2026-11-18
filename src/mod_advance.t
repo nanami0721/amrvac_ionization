@@ -1,5 +1,6 @@
 !> Module containing all the time stepping schemes
 module mod_advance
+  use mod_basic_types, only: ct_stage_flux
 
   implicit none
   private
@@ -11,6 +12,8 @@ module mod_advance
   !> block-loop wall time across all substages within one full advance call,
   !> excluding ghostcell exchanges and flux conservation collectives).
   double precision :: lb_compute_accum = 0.0d0
+
+  type(ct_stage_flux), allocatable, save :: stage_fluxes(:)
 
   public :: advance
   public :: process
@@ -778,6 +781,9 @@ contains
     use mod_fix_conserve
     use mod_physics
     use mod_eos, only: prepare_eos_w_fields
+    use mod_finite_volume, only: finite_volume
+    use mod_usr_methods, only: usr_ct_stage
+    use mod_comm_lib, only: mpistop
 
     integer, intent(in) :: idim^LIM
     type(state), target :: psa(max_blocks) !< Compute fluxes based on this state
@@ -788,7 +794,7 @@ contains
     integer, intent(in) :: method(nlevelshi)
 
     double precision :: qdt
-    double precision :: lb_t0_advect1, lb_t0_block
+    double precision :: lb_t0_advect1, lb_t0_block, ct_exchange_seconds,ct_exchange_start
     integer :: iigrid, igrid
 
     istep = istep+1
@@ -798,8 +804,58 @@ contains
     end if
 
     qdt=dtfactor*dt
+    ct_exchange_seconds=0.d0
     ! opedit: Just advance the active grids:
     if (lb_diagnose) lb_t0_advect1 = MPI_WTIME()
+    if(ct_stage_split) then
+      ! This first API is intentionally bounded to the fixed-grid 3D UCT-HLL
+      ! path. No AMR, local timestep or MUSCL fallback can consume cached fluxes.
+      if(ndim/=3.or..not.stagger_grid.or.refine_max_level/=1.or.lb_automatic.or. &
+        local_timestep.or.dimsplit.or.t_stepper/=threestep.or.t_integrator/=ssprk3) &
+        call mpistop('split CT requires fixed 3D global SSPRK3 without AMR/load balancing')
+      if(method(1)/=fs_tvdlf.and.method(1)/=fs_hll) call mpistop('split CT supports TVDLF or HLL')
+      if(.not.associated(phys_get_ct_edges).or..not.associated(phys_apply_ct_edges)) &
+        call mpistop('split CT requires UCT-HLL edge and curl procedures')
+      if(.not.allocated(stage_fluxes)) allocate(stage_fluxes(max_blocks))
+      ! Allocate outside the threaded kernel; retain storage across substages.
+      do iigrid=1,igridstail_active
+        igrid=igrids_active(iigrid)
+        if(.not.allocated(stage_fluxes(igrid)%face)) then
+          allocate(stage_fluxes(igrid)%face(ixG^T,nwflux,ndim))
+          allocate(stage_fluxes(igrid)%edge(ixG^T,sdim:3))
+        end if
+      end do
+      !$OMP PARALLEL DO PRIVATE(igrid)
+      do iigrid=1,igridstail_active
+        igrid=igrids_active(iigrid);block=>ps(igrid)
+        ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
+        stage_fluxes(igrid)%face=0.d0
+        stage_fluxes(igrid)%edge=0.d0
+        call finite_volume(method(block%level),qdt,dtfactor,ixG^LL,ixM^LL,idim^LIM, &
+          qtC,psa(igrid),qt,psb(igrid),stage_fluxes(igrid)%face,stage_fluxes(igrid)%edge, &
+          rnode(rpdx1_:rnodehi,igrid),ps(igrid)%x,ct_stage_prepare)
+      end do
+      !$OMP END PARALLEL DO
+      ! Every rank arrives once per RK stage, regardless of its block count.
+      if(associated(usr_ct_stage)) then
+        if(lb_diagnose) ct_exchange_start=MPI_WTIME()
+        call usr_ct_stage(qtC,qdt,psa,psb,stage_fluxes)
+        if(lb_diagnose) ct_exchange_seconds=MPI_WTIME()-ct_exchange_start
+      end if
+      !$OMP PARALLEL DO PRIVATE(igrid)
+      do iigrid=1,igridstail_active
+        igrid=igrids_active(iigrid);block=>ps(igrid)
+        ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
+        call finite_volume(method(block%level),qdt,dtfactor,ixG^LL,ixM^LL,idim^LIM, &
+          qtC,psa(igrid),qt,psb(igrid),stage_fluxes(igrid)%face,stage_fluxes(igrid)%edge, &
+          rnode(rpdx1_:rnodehi,igrid),ps(igrid)%x,ct_stage_apply)
+        if(fix_conserve_global.and.fix_conserve_at_step) then
+          call store_flux(igrid,stage_fluxes(igrid)%face,idim^LIM,nwflux)
+          call store_edge(igrid,ixG^LL,stage_fluxes(igrid)%edge,idim^LIM)
+        end if
+      end do
+      !$OMP END PARALLEL DO
+    else
     !$OMP PARALLEL DO PRIVATE(igrid,lb_t0_block)
     do iigrid=1,igridstail_active; igrid=igrids_active(iigrid);
       if (lb_automatic) lb_t0_block = MPI_WTIME()
@@ -810,7 +866,8 @@ contains
       if (lb_automatic) block_cost(igrid) = block_cost(igrid) + (MPI_WTIME() - lb_t0_block)
     end do
     !$OMP END PARALLEL DO
-    if (lb_diagnose) lb_compute_accum = lb_compute_accum + (MPI_WTIME() - lb_t0_advect1)
+    end if ! staged or original block advance
+    if (lb_diagnose) lb_compute_accum = lb_compute_accum + (MPI_WTIME() - lb_t0_advect1) - ct_exchange_seconds
 
     ! opedit: Send flux for all grids, expects sends for all
     ! nsend_fc(^D), set in connectivity.t.

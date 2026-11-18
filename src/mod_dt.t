@@ -79,7 +79,7 @@ contains
   
     if (dtpar<=zero) then
        call MPI_ALLREDUCE(dtmin_mype,dt,1,MPI_DOUBLE_PRECISION,MPI_MIN, &
-                          icomm,ierrmpi)
+                          MPI_COMM_WORLD,ierrmpi)
     else
        dt=dtmin_mype
     end if
@@ -125,14 +125,14 @@ contains
     ! global Lax-Friedrich finite difference flux splitting needs fastest wave-speed
     ! so does GLM: 
     if(need_global_cmax)   call MPI_ALLREDUCE(cmax_mype,  cmax_global,  1,&
-         MPI_DOUBLE_PRECISION,MPI_MAX,icomm,ierrmpi)
+         MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,ierrmpi)
   
     ! transition region adaptive thermal conduction (Johnston 2019 ApJL, 873, L22)
     ! transition region adaptive thermal conduction (Johnston 2020 A&A, 635, 168)
     if(phys_trac) then
       T_bott=2.d4/unit_temperature
       call MPI_ALLREDUCE(Tmax_mype,T_peak,1,MPI_DOUBLE_PRECISION,&
-           MPI_MAX,icomm,ierrmpi)
+           MPI_MAX,MPI_COMM_WORLD,ierrmpi)
       if(phys_trac_type==1) then
         !> 1D TRAC method
         trac_dmax=0.1d0
@@ -141,7 +141,7 @@ contains
         tco_global=zero
         {^IFONED
         call MPI_ALLREDUCE(tco_mype,tco_global,1,MPI_DOUBLE_PRECISION,&
-             MPI_MAX,icomm,ierrmpi)
+             MPI_MAX,MPI_COMM_WORLD,ierrmpi)
         }
       endif
       if(.not. associated(phys_trac_after_setdt)) call mpistop("phys_trac_after_setdt not set")

@@ -11,6 +11,8 @@ module mod_geometry
   integer, parameter :: spherical          = 3
   integer, parameter :: Cartesian_expansion= 4
 
+  integer, parameter :: yinyang = 5
+
   integer :: type_curl=0
   integer, parameter :: central=1
   integer, parameter :: Gaussbased=2
@@ -78,6 +80,14 @@ contains
       phi_ = 2
       z_   = 3
       coordinate=cylindrical
+    case ("yinyang")
+      if(ndim/=3) call mpistop("yinyang requires 3D3V")
+      ndir=3
+      r_=1
+      phi_=3
+      z_=-1
+      coordinate=yinyang
+      yinyang_enabled=.true.
     case ("spherical","spherical_2D","spherical_3D")
       ndir = ndim
       r_   = 1
@@ -211,7 +221,7 @@ contains
       s%surface(ixG^S,3)=s%surfaceC(ixG^S,3)
       }
       {s%surfaceC(0^D%ixG^S,^D)=s%surfaceC(1^D%ixG^S,^D);\}
-    case (spherical)
+    case (spherical,yinyang)
       x(ixG^S,1)=s%x(ixG^S,1)
       {^NOONED
       x(ixG^S,2)=s%x(ixG^S,2)
@@ -371,7 +381,7 @@ contains
       gradq(ixO^S)=gradq(ixO^S)/dxlevel(idir)
     case(Cartesian_stretched,Cartesian_expansion)
       gradq(ixO^S)=(q(jxO^S)-q(hxO^S))/(block%x(jxO^S,idir)-block%x(hxO^S,idir))
-    case(spherical)
+    case(spherical,yinyang)
       select case(idir)
       case(1)
         gradq(ixO^S)=(q(jxO^S)-q(hxO^S))/((block%x(jxO^S,1)-block%x(hxO^S,1)))
@@ -440,7 +450,7 @@ contains
       gradq(ixO^S)=(qR(ixO^S)-qL(hxO^S))*invdx
     case(Cartesian_stretched,Cartesian_expansion)
       gradq(ixO^S)=(qR(ixO^S)-qL(hxO^S))/block%dx(ixO^S,idir)
-    case(spherical)
+    case(spherical,yinyang)
       gradq(ixO^S)=(qR(ixO^S)-qL(hxO^S))/block%dx(ixO^S,idir)
       select case(idir)
       case(2)
@@ -545,7 +555,7 @@ contains
       gradq(ixO^S)=gradq(ixO^S)/dxlevel(idir)
     case(Cartesian_stretched)
       gradq(ixO^S)=(q(jxO^S)-q(hxO^S))/(x(jxO^S,idir)-x(hxO^S,idir))
-    case(spherical)
+    case(spherical,yinyang)
       select case(idir)
       case(1)
         gradq(ixO^S)=(q(jxO^S)-q(hxO^S))/(x(jxO^S,1)-x(hxO^S,1))
@@ -755,7 +765,7 @@ contains
       end select
     case(Cartesian_stretched,Cartesian_expansion)
         call mpistop("No laplacian available")
-    case(spherical)
+    case(spherical,yinyang)
         call mpistop("No laplacian available")
     case(cylindrical)
         call mpistop("No laplacian available")
@@ -901,7 +911,7 @@ contains
             if(idir<idirmin)idirmin=idir
           endif
         enddo; enddo; enddo;
-      case(spherical) ! possibly stretched spherical grids
+      case(spherical,yinyang) ! possibly stretched spherical grids
         select case(type_curl)
           case(central) ! ok for any dimensionality
             do idir=idirmin0,3; do jdir=1,ndim; do kdir=1,ndir0
@@ -1354,7 +1364,7 @@ contains
             if(idir<idirmin)idirmin=idir
           endif
         enddo; enddo; enddo;
-      case(spherical) ! possibly stretched spherical grids
+      case(spherical,yinyang) ! possibly stretched spherical grids
         select case(type_curl)
           case(central) ! ok for any dimensionality
             do idir=idirmin0,3; do jdir=1,ndim; do kdir=1,ndir0

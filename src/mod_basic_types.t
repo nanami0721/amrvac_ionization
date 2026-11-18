@@ -21,4 +21,11 @@ module mod_basic_types
   !> Default length for names (of e.g. variables)
   integer, parameter :: name_len = 16
 
+  !> RK-substage flux workspace; allocated per local block, reused between stages.
+  type ct_stage_flux
+    double precision, allocatable :: face(:^D&,:,:)
+    double precision, allocatable :: edge(:^D&,:)
+  end type ct_stage_flux
+  integer, parameter :: ct_stage_full=0, ct_stage_prepare=1, ct_stage_apply=2
+
 end module mod_basic_types

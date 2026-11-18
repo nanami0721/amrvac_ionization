@@ -4,6 +4,7 @@ module mod_comm_lib
   private
 
 
+  public :: comm_start_patch
   public :: comm_start
   public :: comm_finalize
   public :: init_comm_types
@@ -44,6 +45,18 @@ contains
   
   end subroutine comm_start
   
+  subroutine comm_start_patch
+    use mod_global_parameters
+    if(.not.yinyang_enabled) return
+    yy_world_rank=mype
+    yy_world_size=npe
+    if(npe<2.or.mod(npe,2)/=0) call mpistop("yinyang needs an even MPI size >= 2")
+    yy_patch=mype/(npe/2)
+    call MPI_COMM_SPLIT(MPI_COMM_WORLD,yy_patch,mype,icomm,ierrmpi)
+    call MPI_COMM_RANK(icomm,mype,ierrmpi)
+    call MPI_COMM_SIZE(icomm,npe,ierrmpi)
+  end subroutine comm_start_patch
+
   !> Finalize (or shutdown) the MPI environment
   subroutine comm_finalize
     use mod_global_parameters
@@ -213,7 +226,7 @@ contains
     write(*, *) "ERROR for processor", mype, ":"
     write(*, *) trim(message)
   
-    call MPI_ABORT(icomm, ierrcode, ierrmpi)
+    call MPI_ABORT(MPI_COMM_WORLD, 1, ierrmpi)
   
   end subroutine mpistop
   

@@ -1,0 +1,47 @@
+&filelist
+ base_filename='yy'
+ autoconvert=.false.
+/
+&savelist
+ itsave(1,1)=0
+ itsave(1,2)=0
+ ditsave_log=1
+ ditsave_dat=5
+/
+&stoplist
+ it_max=5
+/
+&methodlist
+ time_stepper='threestep'
+ flux_scheme=20*'tvdlf'
+ limiter=20*'minmod'
+/
+&boundlist
+ typeboundary_min1=1*'cont'
+ typeboundary_max1=1*'cont'
+ typeboundary_min2=1*'cont'
+ typeboundary_max2=1*'cont'
+ typeboundary_min3=1*'cont'
+ typeboundary_max3=1*'cont'
+/
+&meshlist
+ refine_max_level=1
+ block_nx1=8
+ block_nx2=8
+ block_nx3=8
+ domain_nx1=16
+ domain_nx2=16
+ domain_nx3=48
+ xprobmin1=1.d0
+ xprobmax1=2.d0
+ xprobmin2=0.109375d0
+ xprobmax2=0.390625d0
+ xprobmin3=-0.390625d0
+ xprobmax3=0.390625d0
+/
+&paramlist
+ courantpar=0.3d0
+/
+&rho_list
+ rho_v=0.d0,0.d0,0.d0
+/

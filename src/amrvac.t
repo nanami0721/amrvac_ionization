@@ -3,6 +3,7 @@
 !> using adaptive mesh refinement.
 program amrvac
 
+  use mod_yinyang, only: yy_report
   use mod_global_parameters
   use mod_input_output
   use mod_usr_methods
@@ -23,7 +24,7 @@ program amrvac
   use mod_coarsen_refine, only: amr_rebalance
   use mod_trac, only: initialize_trac_after_settree
   use mod_convert_files, only: generate_plotfile
-  use mod_comm_lib, only: comm_start, comm_finalize,mpistop
+  use mod_comm_lib, only: comm_start, comm_start_patch, comm_finalize,mpistop
   use mod_escape_probability, only: escape_prob_compute_colmass
   use mod_rt_sc_slab, only: rt_sc_solve, rt_sc_active
 
@@ -47,6 +48,7 @@ program amrvac
   call eos_init()
   ! the user_init routine should load a physics module
   call usr_init()
+  call comm_start_patch()
 
   call eos_finalise() !> finalise the EoS dispatch (tables, pointers) for the loaded physics
 
@@ -199,6 +201,7 @@ program amrvac
 
   ! do time integration of all grids on all levels
   call timeintegration()
+  call yy_report()
 
   if (mype==0) then
      time0=MPI_WTIME()-time0
@@ -342,21 +345,29 @@ contains
 
        ! output a snapshot when user write a file named 'savenow' in the same
        ! folder as the executable amrvac
-       if (mype==0) inquire(file='savenow',exist=save_now)
-       if (npe>1) call MPI_BCAST(save_now,1,MPI_LOGICAL,0,icomm,ierrmpi)
+       if(yinyang_enabled) then
+         if(yy_world_rank==0) inquire(file='savenow',exist=save_now)
+         call MPI_BCAST(save_now,1,MPI_LOGICAL,0,MPI_COMM_WORLD,ierrmpi)
+       else
+         if (mype==0) inquire(file='savenow',exist=save_now)
+         if (npe>1) call MPI_BCAST(save_now,1,MPI_LOGICAL,0,icomm,ierrmpi)
+       end if
 
        if (save_now) then
           if(mype==0) write(*,'(a,i7,a,i7,a,es12.4)') ' save a snapshot No.',&
                snapshotnext,' at it=',it,' global_time=',global_time
           call saveamrfile(1)
           call saveamrfile(2)
-          call MPI_FILE_DELETE('savenow',MPI_INFO_NULL,ierrmpi)
+          if (.not.yinyang_enabled.or.yy_world_rank==0) &
+            call MPI_FILE_DELETE('savenow',MPI_INFO_NULL,ierrmpi)
        end if
        tw_save=timer_close(tio)
        timeio_tot=timeio_tot+tw_save
 
        pass_wall_time=MPI_WTIME()-time0+dt_loop+4.d0*time_write >=wall_time_max
 
+       if(yinyang_enabled) call MPI_ALLREDUCE(MPI_IN_PLACE,pass_wall_time,1, &
+            MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,ierrmpi)
        ! exit time loop if time is up
        if (it>=it_max .or. global_time>=time_max .or. pass_wall_time .or. final_dt_exit) exit time_evol
 
@@ -369,12 +380,12 @@ contains
        tw_advance=MPI_WTIME()-tw_tmp
 
        ! if met unphysical values, output the last good status and stop the run
-       call MPI_ALLREDUCE(crash,crashall,1,MPI_LOGICAL,MPI_LOR,icomm,ierrmpi)
+       call MPI_ALLREDUCE(crash,crashall,1,MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,ierrmpi)
        if (crashall) then
          call saveamrfile(1)
          call saveamrfile(2)
          if(mype==0) write(*,*) "Error: small value encountered, run crash."
-         call MPI_ABORT(icomm, iigrid, ierrmpi)
+         call MPI_ABORT(MPI_COMM_WORLD, 1, ierrmpi)
        end if
 
        ! Optionally call a user method that can modify the grid variables at the

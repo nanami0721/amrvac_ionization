@@ -401,6 +401,7 @@ contains
     use mod_boundary_conditions, only: getintbc, bc_phys
     use mod_comm_lib, only: mpistop
     use mod_timing, only: timer_open, timer_close
+    use mod_yinyang, only: yy_exchange
 
     double precision, intent(in)      :: time, qdt
     type(state), target               :: psb(max_blocks)
@@ -610,6 +611,11 @@ contains
       !$OMP END PARALLEL DO
     end if
 
+    ! Radial divB closure differentiates across angular patch boundaries. Fill
+    ! those donors first; the final exchange below then propagates the corrected
+    ! radial ghosts to the other patch's radial/angular corners.
+    if(bcphys.and.yy_radial_boundary_adjust) call yy_exchange(psb,nwstart,nwbc)
+
      ! modify normal component of magnetic field to fix divB=0 
     if(bcphys.and.associated(phys_boundary_adjust)) then
       !$OMP PARALLEL DO SCHEDULE(dynamic) PRIVATE(igrid)
@@ -619,6 +625,8 @@ contains
       end do
       !$OMP END PARALLEL DO
     end if
+
+    if(yinyang_enabled) call yy_exchange(psb,nwstart,nwbc)
 
     ! EoS work in the boundary conditions and level-jump conversions is counted under the EoS
     time_bc=time_bc+timer_close(tbc)
@@ -705,6 +713,7 @@ contains
         block=>psb(igrid)
         ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
         do idims=1,ndim
+          if(yinyang_enabled.and.idims>1) cycle
           ! to avoid using as yet unknown corner info in more than 1D, we
           ! fill only interior mesh ranges of the ghost cell ranges at first,
           ! and progressively enlarge the ranges to include corners later

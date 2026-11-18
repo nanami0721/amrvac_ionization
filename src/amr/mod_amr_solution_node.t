@@ -491,7 +491,7 @@ contains
         psc(igrid)%dvolume(ixCoG^S)= exp_factor_primitive_coarse(ixCoG^S)
         psc(igrid)%ds(ixCoG^S,1)=psc(igrid)%dx(ixCoG^S,1)
         }
-      case (spherical)
+      case (spherical,yinyang)
         ps(igrid)%dvolume(ixGext^S)=(xext(ixGext^S,1)**2 &
                                   +ps(igrid)%dx(ixGext^S,1)**2/12.0d0)*&
                 ps(igrid)%dx(ixGext^S,1){^NOONED &

@@ -1,5 +1,6 @@
 !> Module for reading input and writing output
 module mod_input_output
+  use mod_yinyang, only: yy_checkpoint, yy_checkpoint_begin
   use mod_comm_lib, only: mpistop
   use mod_basic_types, only: name_len
 
@@ -260,7 +261,7 @@ contains
 
     namelist /methodlist/ time_stepper, time_integrator, &
          source_split_usr, typesourcesplit, local_timestep, &
-         dimsplit, typedimsplit, flux_scheme, limit_on_wold, &
+         dimsplit, typedimsplit, flux_scheme, limit_on_wold, ct_stage_split, &
          limiter, gradient_limiter, cada3_radius, &
          loglimit, typeboundspeed, H_correction, &
          typetvd, typeentropy, entropycoef, typeaverage, &
@@ -497,6 +498,7 @@ contains
     time_stepper    = 'twostep'
     time_integrator = 'default'
     limit_on_wold   = .false.
+    ct_stage_split = .false.
     ! default PC or explicit midpoint, hence alfa=0.5
     rk2_alfa        = half 
     ! default IMEX-RK22Ln hence lambda = 1 - 1/sqrt(2)
@@ -644,6 +646,13 @@ contains
     end do
 
     base_filename = basename_full
+    if(yinyang_enabled) then
+      if(yy_patch==0) then
+        base_filename=trim(base_filename)//'_yin'
+      else
+        base_filename=trim(base_filename)//'_yang'
+      end if
+    end if
 
     ! Check whether output directory is writable
     if(mype==0) then
@@ -663,6 +672,15 @@ contains
     if(restart_from_file_arg /= undefined) &
       restart_from_file=restart_from_file_arg
 
+    if(yinyang_enabled.and.restart_from_file/=undefined) then
+      my_unit=index(restart_from_file,'{patch}')
+      if(my_unit==0) call mpistop('yinyang restart requires {patch} in filename')
+      if(yy_patch==0) then
+        restart_from_file=restart_from_file(:my_unit-1)//'yin'//trim(restart_from_file(my_unit+7:))
+      else
+        restart_from_file=restart_from_file(:my_unit-1)//'yang'//trim(restart_from_file(my_unit+7:))
+      end if
+    end if
     ! Root process will search snapshot
     if (mype == 0) then
       if(restart_from_file == undefined) then
@@ -1254,7 +1272,7 @@ contains
       slab_uniform=.false.
     end if
 
-    if(coordinate==spherical) then
+    if(coordinate==spherical.or.coordinate==yinyang) then
       if(dimsplit) then
         if(mype==0)print *,'Warning: spherical symmetry needs dimsplit=F, resetting'
         dimsplit=.false.
@@ -1559,7 +1577,7 @@ contains
 
       select case (coordinate)
          {^NOONED
-      case (spherical)
+      case (spherical,yinyang)
          xprob^LIM^DE=xprob^LIM^DE*two*dpi;
          \}
       case (cylindrical)
@@ -2049,6 +2067,7 @@ contains
 
       call MPI_FILE_READ(fh, stagger_mark_dat, 1, MPI_LOGICAL, st, er)
       if (stagger_grid .and. .not. stagger_mark_dat .or. .not.stagger_grid.and.stagger_mark_dat) then
+        if(yinyang_enabled) call mpistop('yinyang restart staggered field mode mismatch')
         write(*,*) "Warning: stagger grid flag differs from restart data:", stagger_mark_dat
         !call mpistop("change parameter to use stagger grid")
       end if
@@ -2125,6 +2144,14 @@ contains
     type(tree_node), pointer      :: pnode
 
     call MPI_BARRIER(icomm, ierrmpi)
+
+    if(yinyang_enabled) then
+      block
+        character(len=std_len) :: yy_name
+        write(yy_name,'(a,i4.4,a)') trim(base_filename),snapshotnext,'.dat'
+        call yy_checkpoint_begin(trim(yy_name))
+      end block
+    end if
 
     ! Allocate send/receive buffer
     n_values = count_ix(ixG^LL) * nw
@@ -2268,6 +2295,13 @@ contains
     end if
 
     call MPI_BARRIER(icomm, ierrmpi)
+    if(yinyang_enabled) then
+      block
+        character(len=std_len) :: yy_name
+        write(yy_name,'(a,i4.4,a)') trim(base_filename),snapshotnext,'.dat'
+        call yy_checkpoint(trim(yy_name),.true.)
+      end block
+    end if
   end subroutine write_snapshot
 
   !> Enable the debug field dump: register n named slots. Capture fields with
@@ -2455,6 +2489,7 @@ contains
     call MPI_BCAST(it,1,MPI_INTEGER,0,icomm,ierrmpi)
     call MPI_BCAST(global_time,1,MPI_DOUBLE_PRECISION,0,icomm,ierrmpi)
 
+    call yy_checkpoint(trim(restart_from_file),.false.)
     call MPI_BCAST(snapshotnext,1,MPI_INTEGER,0,icomm,ierrmpi)
     call MPI_BCAST(slicenext,1,MPI_INTEGER,0,icomm,ierrmpi)
     call MPI_BCAST(collapsenext,1,MPI_INTEGER,0,icomm,ierrmpi)

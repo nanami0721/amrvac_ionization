@@ -114,7 +114,7 @@ contains
 
   !> finite volume method
   subroutine finite_volume(method,qdt,dtfactor,ixI^L,ixO^L,idims^LIM, &
-       qtC,sCT,qt,snew,fC,fE,dxs,x)
+       qtC,sCT,qt,snew,fC,fE,dxs,x,ct_phase)
     use mod_physics
     use mod_variables
     use mod_global_parameters
@@ -124,6 +124,8 @@ contains
     use mod_usr_methods
     use mod_comm_lib, only: mpistop
 
+    integer, optional, intent(in) :: ct_phase
+    integer :: phase
     integer, intent(in)                                   :: method
     double precision, intent(in)                          :: qdt, dtfactor, qtC, qt, dxs(ndim)
     integer, intent(in)                                   :: ixI^L, ixO^L, idims^LIM
@@ -156,6 +158,9 @@ contains
     logical :: active=.false., need_hd_mom_flux=.false.
     type(ct_velocity) :: vcts
 
+    phase=ct_stage_full
+    if(present(ct_phase)) phase=ct_phase
+    if(phase<ct_stage_full.or.phase>ct_stage_apply) call mpistop('invalid CT stage phase')
     associate(wCT=>sCT%w, wnew=>snew%w)
 
     ! The flux calculation contracts by one in the idims direction it is applied.
@@ -171,6 +176,7 @@ contains
 
     wprim=wCT
     call phys_to_primitive(ixI^L,ixI^L,wprim,x)
+    if(phase/=ct_stage_apply) then
     ! typelimited='previous' (VAC): in the corrector of the Predictor_Corrector stepper with a
     ! Hancock predictor, take cell centres from wCT = w^{n+1/2} but the limited slopes from
     ! w^n, which snew%w still holds here.  Only for the slope limiters (minmod ... cada3).
@@ -325,8 +331,17 @@ contains
        end if
 
     end do ! Next idims
+    end if ! fluxes are already available on the apply pass
     b0i=0
-    if(stagger_grid) call phys_update_faces(ixI^L,ixO^L,qt,qdt,wprim,fC,fE,sCT,snew,vcts)
+    if(phase==ct_stage_prepare) then
+      if(.not.associated(phys_get_ct_edges)) call mpistop('CT edge-generation API unavailable')
+      call phys_get_ct_edges(ixI^L,ixO^L,qt,qdt,wprim,fC,fE,sCT,snew,vcts)
+      return
+    else if(phase==ct_stage_apply) then
+      call phys_apply_ct_edges(ixI^L,ixO^L,fE,snew)
+    else
+      if(stagger_grid) call phys_update_faces(ixI^L,ixO^L,qt,qdt,wprim,fC,fE,sCT,snew,vcts)
+    end if
     if(slab_uniform) then
       if(local_timestep) then
         dxinv(1:ndim)=-dtfactor/dxs(1:ndim)
@@ -422,9 +437,15 @@ contains
        end if
     end if
  
+    if(associated(usr_fv_stage_diagnostic)) &
+      call usr_fv_stage_diagnostic(fv_before_sources,qdt,ixI^L,ixO^L,idims^LIM,fC,wCT,wnew,x)
+
     call addsource2(qdt*dble(idimsmax-idimsmin+1)/dble(ndim),& 
          dtfactor*dble(idimsmax-idimsmin+1)/dble(ndim),&
          ixI^L,ixO^L,1,nw,qtC,wCT,wprim,qt,wnew,x,.false.,active)
+    if(associated(usr_fv_stage_diagnostic)) &
+      call usr_fv_stage_diagnostic(fv_after_sources,qdt,ixI^L,ixO^L,idims^LIM,fC,wCT,wnew,x)
+
 
   end associate
   contains

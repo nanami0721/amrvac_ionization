@@ -6,7 +6,7 @@ mod_basic_types.t \
 mod_advance.t mod_dt.t 		\
 mod_finite_volume.t mod_tvd.t mod_finite_difference.t \
 mod_functions_connectivity.t mod_boundary_conditions.t mod_comm_lib.t 	\
-mod_geometry.t mod_ghostcells_update.t mod_small_values.t  \
+mod_yinyang.t mod_geometry.t mod_ghostcells_update.t mod_small_values.t  \
 mod_fix_conserve.t mod_source.t mod_initialize.t  \
 mod_amrvac.t mod_bc_data.t mod_lookup_table.t    \
 mod_constrained_transport.t mod_multigrid_coupling.t \
@@ -46,6 +46,8 @@ amrvac.o: mod_timing.mod
 amrvac.o: mod_trac.mod
 amrvac.o: mod_usr.mod
 amrvac.o: mod_usr_methods.mod
+amrvac.o: mod_yinyang.mod
+mod_advance.o: mod_basic_types.mod
 mod_advance.o: mod_comm_lib.mod
 mod_advance.o: mod_eos.mod
 mod_advance.o: mod_finite_difference.mod
@@ -358,6 +360,7 @@ mod_ghostcells_update.o: mod_global_parameters.mod
 mod_ghostcells_update.o: mod_physics.mod
 mod_ghostcells_update.o: mod_timing.mod
 mod_ghostcells_update.o: mod_usr_methods.mod
+mod_ghostcells_update.o: mod_yinyang.mod
 mod_gimli.o: mod_comm_lib.mod
 mod_gimli.o: mod_eos.mod
 mod_gimli.o: mod_functions_bfield.mod
@@ -449,6 +452,7 @@ mod_initialize.o: mod_init_datafromfile.mod
 mod_initialize.o: mod_input_output.mod
 mod_initialize.o: mod_physics.mod
 mod_initialize.o: mod_usr_methods.mod
+mod_initialize.o: mod_yinyang.mod
 mod_initialize_amr.o: mod_amr_solution_node.mod
 mod_initialize_amr.o: mod_comm_lib.mod
 mod_initialize_amr.o: mod_constrained_transport.mod
@@ -478,6 +482,7 @@ mod_input_output.o: mod_small_values.mod
 mod_input_output.o: mod_source.mod
 mod_input_output.o: mod_timing.mod
 mod_input_output.o: mod_usr_methods.mod
+mod_input_output.o: mod_yinyang.mod
 mod_input_output_helper.o: mod_comm_lib.mod
 mod_input_output_helper.o: mod_forest.mod
 mod_input_output_helper.o: mod_global_parameters.mod
@@ -891,3 +896,7 @@ mod_wb_atmosphere.o: mod_comm_lib.mod
 mod_wb_atmosphere.o: mod_global_parameters.mod
 mod_weno.o: mod_global_parameters.mod
 mod_weno.o: mod_physics.mod
+mod_yinyang.o: mod_comm_lib.mod
+mod_yinyang.o: mod_forest.mod
+mod_yinyang.o: mod_global_parameters.mod
+mod_yinyang.o: mod_physics.mod

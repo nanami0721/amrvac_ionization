@@ -240,7 +240,7 @@ contains
                 w_TEC(iw)=wC(ix^D,iw)
              end if
           end do
-       case (spherical)
+       case (spherical,yinyang)
           x_TEC(1)=xC(ix^D,1){^NOONED*sin(xC(ix^D,2))}{^IFTHREED*cos(xC(ix^D,3))}
           {^IFTWOD
           x_TEC(2)=xC(ix^D,1)*cos(xC(ix^D,2))}
@@ -279,6 +279,16 @@ contains
        case default
           write(*,*) "No converter for coordinate=",coordinate
        end select
+       {^IFTHREED
+       if(yinyang_enabled.and.yy_patch==1) then
+          x_TEC(1)=-x_TEC(1)
+          x_TEC(2:3)=x_TEC(3:2:-1)
+          do ivector=1,nvector
+             iw0=iw_vector(ivector)
+             w_TEC(iw0+1)=-w_TEC(iw0+1)
+             w_TEC(iw0+2:iw0+3)=w_TEC(iw0+3:iw0+2:-1)
+          end do
+       end if}
        x_TMP(ix^D,1:ndim)=x_TEC(1:ndim)
        w_TMP(ix^D,1:nw+nwauxio)=w_TEC(1:nw+nwauxio)
        ! Be aware that small values are nullified here!!!

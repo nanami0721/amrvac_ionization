@@ -22,6 +22,7 @@ contains
     use mod_init_datafromfile, only: read_data_init
     use mod_comm_lib, only: init_comm_types
     use mod_eos, only: eos
+    use mod_yinyang, only: yy_validate
 
     if (initialized_already) return
 
@@ -30,6 +31,8 @@ contains
 
     ! Read input files
     call read_par_files()
+    if(yinyang_enabled.and.eos%eos_type/='FI') call mpistop('yinyang requires FI ideal-gas EOS')
+    call yy_validate()
     call initialize_vars()
     call init_comm_types()
 

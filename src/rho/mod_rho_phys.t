@@ -229,7 +229,7 @@ contains
           end select
        endif
        }
-    case (spherical)
+    case (spherical,yinyang)
        {^IFONED 
        call mpistop("advection in 1D spherical not available")
        }

@@ -86,6 +86,9 @@ module mod_physics
   procedure(sub_small_values), pointer    :: phys_handle_small_values    => null()
   procedure(sub_get_ct_velocity), pointer :: phys_get_ct_velocity        => null()
   procedure(sub_update_faces), pointer    :: phys_update_faces           => null()
+  ! Optional staged CT API: edge generation must not mutate either state.
+  procedure(sub_update_faces), pointer :: phys_get_ct_edges => null()
+  procedure(sub_apply_ct_edges), pointer :: phys_apply_ct_edges => null()
   procedure(sub_face_to_center), pointer  :: phys_face_to_center         => null()
   procedure(sub_implicit_update), pointer :: phys_implicit_update        => null()
   procedure(sub_evaluate_implicit),pointer:: phys_evaluate_implicit      => null()
@@ -377,6 +380,13 @@ module mod_physics
        double precision, intent(in)       :: fC(ixI^S,1:nwflux,1:ndim)
        double precision, intent(inout)    :: fE(ixI^S,sdim:3)
      end subroutine sub_update_faces
+
+     subroutine sub_apply_ct_edges(ixI^L,ixO^L,fE,s)
+       use mod_global_parameters
+       integer, intent(in) :: ixI^L,ixO^L
+       double precision, intent(in) :: fE(ixI^S,sdim:3)
+       type(state) :: s
+     end subroutine sub_apply_ct_edges
 
      subroutine sub_face_to_center(ixO^L,s)
        use mod_global_parameters

@@ -18,6 +18,15 @@ module mod_usr_methods
 
   procedure(internal_bc), pointer     :: usr_internal_bc      => null()
 
+  ! All-local-block CT exchange point, outside OpenMP loops, before any update.
+  ! Edge entries are time-integrated line integrals; callbacks may alter edges
+  ! only. Face fluxes and states are read-only by contract.
+  procedure(ct_stage_exchange), pointer :: usr_ct_stage => null()
+
+  ! Optional read-only diagnostics for finite-volume stages, before/after sources.
+  integer, parameter :: fv_before_sources=1, fv_after_sources=2
+  procedure(fv_stage_diagnostic), pointer :: usr_fv_stage_diagnostic => null()
+
   ! Output related
   procedure(p_no_args), pointer       :: usr_print_log        => null()
   procedure(p_no_args), pointer       :: usr_write_analysis   => null()
@@ -120,6 +129,13 @@ module mod_usr_methods
   procedure(uawsom_coefficients), pointer :: usr_uawsom_coefficients => null()
 
   abstract interface
+    subroutine ct_stage_exchange(qt,qdt,sCT,s,fluxes)
+      use mod_global_parameters
+      double precision,intent(in) :: qt,qdt
+      type(state),intent(in) :: sCT(max_blocks),s(max_blocks)
+      type(ct_stage_flux),intent(inout) :: fluxes(:)
+    end subroutine ct_stage_exchange
+
 
     subroutine uawsom_coefficients(w,x,ixI^L,ixO^L,primitive,zeta,thread_radius,lperp_alfven)
       use mod_global_parameters
@@ -201,6 +217,17 @@ module mod_usr_methods
       double precision, intent(in)    :: qt,x(ixI^S,1:ndim)
       double precision, intent(inout) :: w(ixI^S,1:nw)
     end subroutine sub_modify_io
+
+    ! Fluxes retain geometry-dependent solver scaling (-dt/dx for uniform
+    ! Cartesian, -dt*face area for curvilinear meshes), and only the active
+    ! direction faces are defined. Callback must not modify state, communicate
+    ! collectively, or assume serial block execution (OpenMP may call it).
+    subroutine fv_stage_diagnostic(phase,qdt,ixI^L,ixO^L,idims^LIM,fC,wCT,w,x)
+      use mod_global_parameters
+      integer,intent(in) :: phase,ixI^L,ixO^L,idims^LIM
+      double precision,intent(in) :: qdt,fC(ixI^S,nwflux,ndim)
+      double precision,intent(in) :: wCT(ixI^S,nw),w(ixI^S,nw),x(ixI^S,ndim)
+    end subroutine fv_stage_diagnostic
 
     !> This subroutine is called at the beginning of each time step
     !> by each processor. No communication is specified, so the user

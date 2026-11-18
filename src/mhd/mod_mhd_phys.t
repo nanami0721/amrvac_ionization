@@ -893,6 +893,8 @@ contains
         transverse_ghost_cells = 2
         phys_get_ct_velocity => mhd_get_ct_velocity_hll
         phys_update_faces => mhd_update_faces_hll
+        phys_get_ct_edges => mhd_get_ct_edges_hll
+        phys_apply_ct_edges => mhd_apply_ct_edges_hll
       case default
         call mpistop('choose average, uct_contact,or uct_hll for type_ct!')
       end select
@@ -1480,6 +1482,30 @@ contains
     use mod_fld
 
     double precision :: a,b,Xfrac,Yfrac
+    integer :: yy_adjust_local,yy_adjust_global
+
+    if(yinyang_enabled) then
+      ! Radial divB closure needs angular ghosts before its derivative stencil.
+      ! Parse once; all ranks must follow the same overset collective sequence.
+      yy_radial_boundary_adjust= &
+        (boundary_divbfix(1).and.any(typeboundary(:,1)==bc_special)).or. &
+        (boundary_divbfix(2).and.any(typeboundary(:,2)==bc_special))
+      ! Integer reduction also avoids compiler/MPI logical representation differences.
+      yy_adjust_local=0
+      if(yy_radial_boundary_adjust) yy_adjust_local=1
+      call MPI_ALLREDUCE(yy_adjust_local,yy_adjust_global,1, &
+        MPI_INTEGER,MPI_MAX,MPI_COMM_WORLD,ierrmpi)
+      yy_radial_boundary_adjust=yy_adjust_global/=0
+      if(.not.mhd_glm.or.type_divb/=divb_glm.or..not.mhd_energy.or..not.total_energy) &
+        call mpistop('yinyang MHD requires GLM and total energy')
+      if(mhd_semirelativistic.or.mhd_internal_e.or.mhd_hydrodynamic_e.or.mhd_uawsom.or. &
+         mhd_radiative_transfer.or.mhd_radiative_cooling.or.mhd_radiation_fld.or. &
+         mhd_thermal_conduction.or.mhd_hyperbolic_tc.or.mhd_trac.or. &
+         mhd_rotating_frame.or.mhd_viscosity.or.mhd_hall.or.mhd_ambipolar.or. &
+         mhd_magnetofriction.or.mhd_cak_force.or.mhd_equi_thermal.or.mhd_fip.or. &
+         mhd_eta/=0.d0.or.mhd_eta_hyper/=0.d0.or.mhd_etah/=0.d0) &
+        call mpistop('yinyang supports ideal MHD with optional user gravity only')
+    end if
 
     if(mhd_radiative_transfer) call rt_sc_setup()
 
@@ -7065,7 +7091,7 @@ contains
         end if
         if(mhd_glm) w(ix^D,br_)=w(ix^D,br_)+wprim(ix^D,psi_)*invr
      {end do\}
-    case (spherical)
+    case (spherical,yinyang)
      {do ix^DB=ixOmin^DB,ixOmax^DB\}
         ! include dt in invr, invr is always used with qdt
         if(local_timestep) then
@@ -7229,7 +7255,7 @@ contains
         end if
         if(mhd_glm) w(ix^D,br_)=w(ix^D,br_)+wprim(ix^D,psi_)*invr
      {end do\}
-    case (spherical)
+    case (spherical,yinyang)
      {do ix^DB=ixOmin^DB,ixOmax^DB\}
         ! include dt in invr, invr is always used with qdt
         if(local_timestep) then
@@ -7411,7 +7437,7 @@ contains
         end if
         if(mhd_glm) w(ix^D,br_)=w(ix^D,br_)+wprim(ix^D,psi_)*invr
      {end do\}
-    case (spherical)
+    case (spherical,yinyang)
      {do ix^DB=ixOmin^DB,ixOmax^DB\}
         ! include dt in invr, invr is always used with qdt
         if(local_timestep) then
@@ -7670,6 +7696,7 @@ contains
     block=>ps(igrid)
     ^D&dxlevel(^D)=rnode(rpdx^D_,igrid);
     do idims=1,ndim
+       if(yinyang_enabled.and.idims>1) cycle
        ! to avoid using as yet unknown corner info in more than 1D, we
        ! fill only interior mesh ranges of the ghost cell ranges at first,
        ! and progressively enlarge the ranges to include corners later
@@ -8598,6 +8625,17 @@ contains
   !> update faces
   subroutine mhd_update_faces_hll(ixI^L,ixO^L,qt,qdt,wp,fC,fE,sCT,s,vcts)
     use mod_global_parameters
+    integer,intent(in) :: ixI^L,ixO^L
+    double precision,intent(in) :: qt,qdt,wp(ixI^S,nw),fC(ixI^S,nwflux,ndim)
+    double precision,intent(inout) :: fE(ixI^S,sdim:3)
+    type(state) :: sCT,s
+    type(ct_velocity) :: vcts
+    call mhd_get_ct_edges_hll(ixI^L,ixO^L,qt,qdt,wp,fC,fE,sCT,s,vcts)
+    call mhd_apply_ct_edges_hll(ixI^L,ixO^L,fE,s)
+  end subroutine mhd_update_faces_hll
+
+  subroutine mhd_get_ct_edges_hll(ixI^L,ixO^L,qt,qdt,wp,fC,fE,sCT,s,vcts)
+    use mod_global_parameters
     use mod_usr_methods
     use mod_constrained_transport
 
@@ -8617,7 +8655,6 @@ contains
     double precision                   :: btilR(ixI^S,ndim)
     double precision                   :: cp(ixI^S,2)
     double precision                   :: cm(ixI^S,2)
-    double precision                   :: circ(ixI^S,1:ndim)
     ! non-ideal electric field on cell edges
     double precision, dimension(ixI^S,sdim:3) :: E_resi, E_ambi
     integer                            :: hxC^L,ixC^L,ixCp^L,jxC^L,ixCm^L
@@ -8723,6 +8760,17 @@ contains
     if(associated(usr_set_electric_field)) &
       call usr_set_electric_field(ixI^L,ixO^L,qt,qdt,fE,sCT)
 
+    end associate
+  end subroutine mhd_get_ct_edges_hll
+
+  subroutine mhd_apply_ct_edges_hll(ixI^L,ixO^L,fE,s)
+    use mod_global_parameters
+    integer,intent(in) :: ixI^L,ixO^L
+    double precision,intent(in) :: fE(ixI^S,sdim:3)
+    type(state) :: s
+    double precision :: circ(ixI^S,ndim)
+    integer :: ixC^L,hxC^L,idim1,idim2,idir,ix^D
+    associate(bfaces=>s%ws)
     circ(ixI^S,1:ndim)=zero
 
     ! Calculate circulation on each face: interal(fE dot dl)
@@ -8752,7 +8800,7 @@ contains
     end do
 
     end associate
-  end subroutine mhd_update_faces_hll
+  end subroutine mhd_apply_ct_edges_hll
 
   !> calculate eta J at cell edges
   subroutine get_resistive_electric_field(ixI^L,ixO^L,wp,sCT,s,jce)

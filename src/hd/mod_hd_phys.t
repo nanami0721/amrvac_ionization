@@ -891,6 +891,13 @@ contains
 
     double precision :: a,b,Xfrac,Yfrac
 
+    if(yinyang_enabled) then
+      if(.not.hd_energy.or.hd_thermal_conduction.or.hd_hyperbolic_thermal_conduction.or. &
+         hd_radiative_cooling.or.hd_radiative_transfer.or.hd_dust.or.hd_radiation_fld.or. &
+         hd_viscosity.or.hd_gravity.or.hd_rotating_frame.or.hd_cak_force.or.hd_fip.or. &
+         hd_trac.or.hd_well_balanced) call mpistop('yinyang v1 supports ideal total-energy HD only')
+    end if
+
     ! Initialize particles module, put here so additional gridvars and user payloads are known
     if (hd_particles) then
        call particles_init()
@@ -2178,7 +2185,7 @@ contains
             w(ixO^S, mr_) = w(ixO^S, mr_) + qdt * source(ixO^S) / x(ixO^S, r_)
           end if
        end do
-    case (spherical)
+    case (spherical,yinyang)
        if (hd_dust) then
           call mpistop("Dust geom source terms not implemented yet with spherical geometries")
        end if

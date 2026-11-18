@@ -256,6 +256,9 @@ module mod_global_parameters
   integer :: mype
 
   !> The MPI communicator
+  logical :: yinyang_enabled=.false.
+  logical :: yy_radial_boundary_adjust=.false.
+  integer :: yy_patch=0, yy_world_rank=0, yy_world_size=1
   integer :: icomm
 
   !> A global MPI error return code
@@ -834,6 +837,7 @@ module mod_global_parameters
 
   !> VAC-type MUSCL-Hancock: limit the corrector slopes on w^n (typelimited='previous'),
   !> for time_stepper='twostep' with the Predictor_Corrector integrator and a Hancock predictor
+  logical :: ct_stage_split = .false.
   logical :: limit_on_wold
   !> whether IMEX in use or not
   logical :: use_imex_scheme
