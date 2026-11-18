@@ -97,3 +97,12 @@ register itself. `yy_ct_close_ghosts` provides angular ghost constraints after
 magnetic ghost faces have been populated. See
 `tests/yinyang/ct_coupling/README.md` and the progress document for tested contracts
 and the still-required full-MHD integration. Yin–Yang CT remains disabled.
+
+## Magnetic face population (2026-11-18)
+
+`yy_prepare_ct_ghosts`/`yy_fill_ct_ghosts` now supply the face population step before
+angular divergence closure. They protect active/boundary faces, use only physical
+face donors and support radial walls via scalar Br interpolation. They are
+explicit APIs and do not register production ghost hooks. Refer to
+`tests/yinyang/ct_ghost_fill/README.md` for coverage, accuracy and remaining
+integration requirements.

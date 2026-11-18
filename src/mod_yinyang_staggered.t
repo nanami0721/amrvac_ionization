@@ -8,7 +8,7 @@ module mod_yinyang_staggered
   public :: yy_staggered_table, yy_staggered_build, yy_staggered_exchange
   public :: yy_staggered_clear, yy_staggered_basis, yy_staggered_offset
   type yy_staggered_table
-    integer :: comm=MPI_COMM_NULL
+    integer :: comm=MPI_COMM_NULL, stencil=24
     integer, allocatable :: request(:,:), slot(:,:), sc(:),rc(:),sd(:),rd(:)
     logical, allocatable :: covered(:)
     double precision, allocatable :: donor_position(:,:), donor_basis(:,:)
@@ -74,17 +74,25 @@ contains
   ! face components or tangent edge components, NOT dt*length edge integrals.
   ! Request rows: local block ID, three zero-based local cell indices, component.
   ! An index -1 denotes the physical lower face/edge, not an unfilled ghost donor.
-  subroutine yy_staggered_build(t,comm,patch,family,bn,nn,radial,angular,directory,points)
+  subroutine yy_staggered_build(t,comm,patch,family,bn,nn,radial,angular,directory,points,radial_scalar)
     type(yy_staggered_table),intent(inout) :: t
     integer,intent(in) :: comm,patch,family,bn(3),nn(3),directory(:,:)
     double precision,intent(in) :: radial(0:),angular(2,2),points(:,:)
-    integer :: np,rank,ierr,n,p,c,q,a,b,d,h,pass,target,base(3),idx(3),bc(3),loc(3)
+    logical,optional,intent(in) :: radial_scalar
+    integer :: np,rank,ierr,n,p,c,q,a,b,d,h,pass,target,base(3),idx(3),bc(3),loc(3),components
     integer :: qrank(24),qreq(5,24),owner,nt,ns,nr,off,ib,nb(3),lo,hi,mid
     integer,allocatable :: owners(:,:,:,:),ids(:,:,:,:),cursor(:),out(:,:),idmap(:)
     double precision :: xyz(3),v(3),sph(3),step(2),offset(3),f(3),u,coord(3),frame(3,3)
-    double precision :: w(24),basis(3,24),normal(3,3),inv(3,3),det,left,right,x
-    logical :: valid
+    double precision :: w(24),basis(3,24),normal(3,3),inv(3,3),det,left,right,x,tolerance
+    logical :: valid,scalar
     call yy_staggered_clear(t)
+    scalar=.false.
+    if(present(radial_scalar)) scalar=radial_scalar
+    components=3
+    if(scalar) then
+      if(family/=yy_face_location) call fail(comm,10)
+      components=1;t%stencil=8
+    end if
     call MPI_COMM_SIZE(comm,np,ierr);call MPI_COMM_RANK(comm,rank,ierr)
     if(patch<0.or.patch>1.or.(family/=yy_face_location.and.family/=yy_edge_location)) &
       call fail(comm,10)
@@ -113,7 +121,7 @@ contains
       owners(bc(1),bc(2),bc(3),p)=directory(5,n);ids(bc(1),bc(2),bc(3),p)=directory(4,n)
     end do
     if(any(owners<0)) call fail(comm,17)
-    allocate(t%sc(np),t%rc(np),t%sd(np),t%rd(np),cursor(np),t%covered(nt),t%slot(24,nt),t%coefficient(3,24,nt))
+    allocate(t%sc(np),t%rc(np),t%sd(np),t%rd(np),cursor(np),t%covered(nt),t%slot(t%stencil,nt),t%coefficient(3,t%stencil,nt))
     t%sc=0;t%slot=0;t%coefficient=0.d0;t%covered=.false.
     step=(angular(:,2)-angular(:,1))/nn(2:3)
     do pass=1,2
@@ -123,16 +131,18 @@ contains
         if(patch==0) v=[-xyz(1),xyz(3),xyz(2)]
         sph=[points(1,target),atan2(sqrt(v(1)**2+v(2)**2),v(3)),atan2(v(2),v(1))]
         valid=.true.;q=0
-        do c=1,3
+        do c=1,components
           call yy_staggered_offset(family,c,offset)
           ! Bracket the shared nonuniform radial mesh without extrapolation.
           lo=0;hi=nn(1)-1
           if(offset(1)==1.d0) lo=-1
           left=radial_sample(lo,offset(1));right=radial_sample(hi,offset(1))
           x=sph(1)
-          if(x<left.or.x>right) then
+          tolerance=1.d-12*max(1.d0,abs(left),abs(right))
+          if(x<left-tolerance.or.x>right+tolerance) then
             valid=.false.;exit
           end if
+          x=max(left,min(right,x))
           do while(hi-lo>1)
             mid=(lo+hi)/2
             if(radial_sample(mid,offset(1))<=x) then
@@ -170,14 +180,15 @@ contains
         if(.not.valid) cycle
         t%covered(target)=.true.
         if(pass==1) then
-          do q=1,24
+          do q=1,t%stencil
             t%sc(qrank(q))=t%sc(qrank(q))+1
           end do
         else
           ! Weighted Cartesian constant fit. Normalization makes any uniform
           ! Cartesian vector exact despite non-collocated component samples.
+          if(.not.scalar) then
           normal=0.d0
-          do q=1,24
+          do q=1,t%stencil
             do d=1,3
               normal(:,d)=normal(:,d)+w(q)*basis(:,q)*basis(d,q)
             end do
@@ -188,10 +199,17 @@ contains
           det=dot_product(normal(:,1),inv(:,1))
           if(det<1.d-8) call fail(comm,18)
           inv=transpose(inv)/det
-          do q=1,24
+          end if
+          do q=1,t%stencil
             p=qrank(q);off=t%sd(p)+cursor(p)+1;cursor(p)=cursor(p)+1
             out(:,off)=qreq(:,q);t%slot(q,target)=off
-            t%coefficient(:,q,target)=w(q)*matmul(inv,basis(:,q))
+            if(scalar) then
+              ! Br is a scalar under patch rotation at a fixed physical point.
+              ! Its own face lattice reaches radial walls without extrapolation.
+              t%coefficient(:,q,target)=w(q)*xyz/points(1,target)
+            else
+              t%coefficient(:,q,target)=w(q)*matmul(inv,basis(:,q))
+            end if
           end do
         end if
       end do
@@ -247,7 +265,7 @@ contains
     cartesian=0.d0
     do n=1,size(t%covered)
       if(.not.t%covered(n)) cycle
-      do q=1,24
+      do q=1,t%stencil
         cartesian(:,n)=cartesian(:,n)+t%coefficient(:,q,n)*t%recv(t%slot(q,n))
       end do
     end do

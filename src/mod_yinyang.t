@@ -1,7 +1,8 @@
 !> Fixed-grid overset coupling; local spherical metrics are unchanged.
 module mod_yinyang
   use mod_yinyang_staggered, only: yy_staggered_table, yy_staggered_build
-  use mod_yinyang_ct_coupling, only: yy_ct_edge_plan, yy_ct_edge_build, yy_ct_edge_exchange
+  use mod_yinyang_ct_coupling, only: yy_ct_edge_plan, yy_ct_edge_build, yy_ct_edge_exchange, &
+    yy_ct_face_plan, yy_ct_face_build, yy_ct_face_exchange, yy_ct_close_ghosts
   use mod_global_parameters
   use mod_physics, only: phys_to_primitive, phys_to_conserved, physics_type
   use mod_comm_lib, only: mpistop
@@ -10,6 +11,13 @@ module mod_yinyang
   private
   public :: yy_validate, yy_exchange, yy_basis, yy_position, yy_checkpoint, yy_checkpoint_begin, yy_report
   public :: yy_build_staggered_table, yy_prepare_ct_edges, yy_exchange_ct_edges, yy_ct_stage_plan
+  public :: yy_ct_ghost_plan, yy_prepare_ct_ghosts, yy_fill_ct_ghosts
+  type yy_ct_ghost_plan
+    type(yy_ct_face_plan) :: faces
+    integer,allocatable :: receivers(:,:)
+    double precision,allocatable :: radial(:),tangent(:),values(:)
+    integer(kind=8) :: mesh_epoch=-1_8
+  end type
   type yy_ct_stage_plan
     type(yy_ct_edge_plan) :: edge
     integer,allocatable :: receivers(:,:)
@@ -157,6 +165,121 @@ contains
     }
     {^IFONED call mpistop('CT edge exchange requires 3D') }
     {^IFTWOD call mpistop('CT edge exchange requires 3D') }
+  end subroutine
+
+  ! Enumerate the union of faces bounding external angular ghost cells. Active
+  ! faces, including active-boundary anchors, are excluded before interpolation.
+  subroutine yy_prepare_ct_ghosts(plan,s)
+    type(yy_ct_ghost_plan),intent(out) :: plan
+    type(state),intent(in) :: s(max_blocks)
+    {^IFTHREED
+    integer :: bn(3),nn(3),n,g,i,j,k,c,d,side,pass,t,idx(3),above(3),lo(3),hi(3),fl(3),pig(3),nb(3)
+    integer,allocatable :: directory(:,:)
+    logical :: sides(2,2),selected,mask(ixGlo1-1:ixGhi1,ixGlo2-1:ixGhi2,ixGlo3-1:ixGhi3,3)
+    double precision,allocatable :: radial(:),centers(:,:)
+    double precision :: angular(2,2),offset(3)
+    call yy_staggered_mesh(s,bn,nn,radial,angular,directory)
+    lo=[ixMlo1,ixMlo2,ixMlo3];hi=[ixMhi1,ixMhi2,ixMhi3];nb=nn/bn
+    do pass=1,2
+      t=0
+      do n=1,igridstail
+        g=igrids(n);pig=[node(pig1_,g),node(pig2_,g),node(pig3_,g)]
+        sides(1,:)=(pig(2:3)==1);sides(2,:)=(pig(2:3)==nb(2:3));mask=.false.
+        do k=ixGlo3,ixGhi3
+          do j=ixGlo2,ixGhi2
+            selected=((j<lo(2).and.sides(1,1)).or.(j>hi(2).and.sides(2,1))) &
+              .and.k>=lo(3).and.k<=hi(3)
+            if((k<lo(3).and.sides(1,2)).or.(k>hi(3).and.sides(2,2))) &
+              selected=(j>=lo(2).and.j<=hi(2)).or.(j<lo(2).and.sides(1,1)).or.(j>hi(2).and.sides(2,1))
+            if(.not.selected) cycle
+            do i=lo(1),hi(1)
+              do c=1,3
+                do side=0,1
+                  idx=[i,j,k];idx(c)=idx(c)-side
+                  fl=lo;fl(c)=fl(c)-1
+                  if(all(idx>=fl).and.all(idx<=hi)) cycle
+                  mask(idx(1),idx(2),idx(3),c)=.true.
+                end do
+              end do
+            end do
+          end do
+        end do
+        do c=1,3
+          do k=ixGlo3-1,ixGhi3
+            do j=ixGlo2-1,ixGhi2
+              do i=ixGlo1-1,ixGhi1
+                if(.not.mask(i,j,k,c)) cycle
+                t=t+1
+                if(pass==1) cycle
+                plan%receivers(:,t)=[g,i,j,k,c];idx=[i,j,k]
+                above=max(idx,[ixGlo1,ixGlo2,ixGlo3])
+                offset=0.d0;offset(c)=0.5d0
+                ! Lower outer face has no center x at index zero. Locate it
+                ! from the adjacent cell center, not from uninitialized x.
+                if(idx(c)<above(c)) offset(c)=-0.5d0
+                centers(:,t)=s(g)%x(above(1),above(2),above(3),:)+ &
+                  offset*s(g)%dx(above(1),above(2),above(3),:)
+              end do
+            end do
+          end do
+        end do
+      end do
+      if(pass==1) allocate(plan%receivers(5,t),centers(3,t),plan%values(t))
+    end do
+    call yy_ct_face_build(plan%faces,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
+      centers,plan%receivers(5,:))
+    if(any(.not.plan%faces%covered)) call mpistop('magnetic ghost face lacks donors: increase overlap')
+    allocate(plan%radial(size(plan%faces%radial%request,2)),plan%tangent(size(plan%faces%tangent%request,2)))
+    plan%mesh_epoch=particle_mesh_epoch
+    }
+    {^IFONED call mpistop('magnetic ghost fill requires 3D') }
+    {^IFTWOD call mpistop('magnetic ghost fill requires 3D') }
+  end subroutine
+
+  ! Fill face B in angular halos, optionally followed by outward flux closure.
+  ! Both donor families are packed before any writes, so a ghost never becomes
+  ! a donor through ordering. Caller handles physical radial and same-patch BCs.
+  subroutine yy_fill_ct_ghosts(plan,s,constrain)
+    type(yy_ct_ghost_plan),intent(inout) :: plan
+    type(state),intent(inout) :: s(max_blocks)
+    logical,intent(in) :: constrain
+    {^IFTHREED
+    integer :: n,g,i,j,k,c,idx(3),lo(3),hi(3),status,pig(3),nb(3)
+    logical :: sides(2,2)
+    if(.not.allocated(plan%values)) call mpistop('magnetic ghost plan has not been built')
+    if(plan%mesh_epoch/=particle_mesh_epoch) call mpistop('magnetic ghost plan is stale')
+    lo=[ixMlo1,ixMlo2,ixMlo3];hi=[ixMhi1,ixMhi2,ixMhi3];nb=[ng1(1),ng2(1),ng3(1)]
+    do n=1,igridstail
+      g=igrids(n)
+      if(.not.allocated(s(g)%ws)) call mpistop('magnetic face workspace missing')
+    end do
+    do n=1,size(plan%radial)
+      g=plan%faces%radial%request(1,n);idx=plan%faces%radial%request(2:4,n)+lo
+      plan%radial(n)=s(g)%ws(idx(1),idx(2),idx(3),1)
+    end do
+    do n=1,size(plan%tangent)
+      g=plan%faces%tangent%request(1,n);idx=plan%faces%tangent%request(2:4,n)+lo
+      c=plan%faces%tangent%request(5,n)
+      plan%tangent(n)=s(g)%ws(idx(1),idx(2),idx(3),c)
+    end do
+    call yy_ct_face_exchange(plan%faces,plan%radial,plan%tangent,plan%values)
+    do n=1,size(plan%values)
+      g=plan%receivers(1,n);i=plan%receivers(2,n);j=plan%receivers(3,n)
+      k=plan%receivers(4,n);c=plan%receivers(5,n)
+      s(g)%ws(i,j,k,c)=plan%values(n)
+    end do
+    if(constrain) then
+      do n=1,igridstail
+        g=igrids(n);pig=[node(pig1_,g),node(pig2_,g),node(pig3_,g)]
+        sides(1,:)=(pig(2:3)==1);sides(2,:)=(pig(2:3)==nb(2:3))
+        call yy_ct_close_ghosts([ixGlo1-1,ixGlo2-1,ixGlo3-1],lo,hi, &
+          [ixGlo1,ixGlo2,ixGlo3],[ixGhi1,ixGhi2,ixGhi3],sides,s(g)%ws,s(g)%surfaceC,status)
+        if(status/=0) call mpistop('invalid geometry or field in magnetic ghost closure')
+      end do
+    end if
+    }
+    {^IFONED call mpistop('magnetic ghost fill requires 3D') }
+    {^IFTWOD call mpistop('magnetic ghost fill requires 3D') }
   end subroutine
 
   ! Invalidate a previous completion record BEFORE overwriting either snapshot.

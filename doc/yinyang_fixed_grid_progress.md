@@ -5,7 +5,7 @@ hardens validation and checkpoints, adds a common-position overlap diagnostic,
 and establishes the ordinary spherical CT prerequisite and a two-pass RK-stage
 CT API. Yin–Yang CT, static B0,
 open-corona boundaries and Parker/dynamic-event validation remain disabled or
-unimplemented. No commit or push was performed.
+unimplemented. See the latest section for commit/push status.
 
 ## Source and evidence
 
@@ -126,8 +126,8 @@ and GLM commands. No performance improvement or overset CT acceptance is claimed
    for physical diagnostics and physical whole-sphere budgets.
 2. Complete M2 integration: the explicit edge-integral exchange and angular
    ghost-face constraint APIs are now implemented and tested below. Remaining
-   work is magnetic ghost population, duplicate-edge synchronization, radial
-   boundary intersections and integration with native face updates.
+   work is integrating the explicit magnetic ghost fill below with duplicate-edge
+   synchronization, radial boundary intersections and native face updates.
    The new opt-in `ct_stage_split` route now supplies an all-block boundary
    between edge generation and curl application. The original route remains the
    default. Exchange must use that stage boundary, never a collective inside a
@@ -257,3 +257,78 @@ integration must populate magnetic ghost faces, order same-patch ghost/duplicate
 edge synchronization, handle radial-wall intersections, synchronize cell-centered
 B/energy and validate evolving fields, restart and interface convergence. The
 CT/B0 rejection remains; no commit/push was made for this increment.
+
+## Magnetic ghost-face fill (2026-11-18)
+
+The preceding edge-integral/ghost-constraint increment was committed locally as
+`0b828120` at the user's request. It was not pushed. The magnetic-fill changes
+below remain uncommitted; no push was performed in this task.
+
+`yy_prepare_ct_ghosts` now constructs a cached union of all required angular
+magnetic ghost faces, excluding active faces and active-boundary anchors.
+`yy_fill_ct_ghosts` packs both donor families before any writes, fills the face
+values and optionally applies the outward divergence constraint. Physical radial
+ghost cells and unrelated same-patch ghost regions are untouched. The lower
+outer face is located from its adjacent center, avoiding undefined x index zero.
+
+Radial wall support uses Br as a patch-invariant scalar on its own face lattice;
+this avoids requesting out-of-domain radially centered tangent components.
+Tangential faces retain the Cartesian-vector reconstruction. Both radial walls
+are exercised with interior/boundary face donors only. A roundoff tolerance was
+added to radial endpoint bracketing; missing physical stencils still fail.
+See `tests/yinyang/ct_ghost_fill/README.md` for the API and indexing contracts.
+
+Acceptance evidence:
+
+- 36 native-grid MPI runs passed: debug/optimized x uniform/stretched radial mesh
+  x three angular resolutions x 2/4/6 ranks. Every run tested constant Cartesian
+  B and divergence-free B=(y,z,x), with/without the constraint, and repeated each
+  fill three times. All non-receiver faces were bitwise preserved, no ghost donor
+  was requested, repeated fills were bitwise reproducible and canonical results
+  were bitwise identical across MPI sizes. Unfilled halos were poisoned by a
+  large sentinel to expose unintended donor reads.
+- Maximum constrained ghost-cell native get_divb was 1.141e-14. This says nothing
+  about repairing pre-existing active-cell divergence; those faces are unchanged.
+- Angular RMS refinement orders ranged from 1.932 to 2.266 over 16x48, 32x96 and
+  48x144 angular grids. Radial resolution was held at eight cells, with two
+  radial blocks. The refinement ratios 2 and 1.5 were used explicitly.
+- The constraint has a measurable accuracy cost. For B=(y,z,x) on the uniform
+  radial mesh, RMS errors without/with the constraint were:
+
+| Angular grid | Without constraint | With constraint |
+|---|---:|---:|
+| 16x48 | 2.920e-3 | 4.994e-3 |
+| 32x96 | 7.651e-4 | 1.038e-3 |
+| 48x144 | 3.449e-4 | 4.472e-4 |
+
+  Both sequences decrease at approximately second order; the constrained fine
+  error is about 30% larger. These are point-component analytic tests on a
+  staggered mesh, not a general 3D asymptotic-order result for area-averaged
+  magnetic fields or a full evolving MHD problem.
+- The original face/edge table suite (72 MPI runs) and edge-integral/constraint
+  suite (72 runs) also passed against the final source. All six full debug
+  dependency libraries compiled. Successful runtime stderr remained empty.
+- Final source/test code hashes match retained manifests; Python syntax and
+  `git diff --check` passed. Final validation system peak was 52.308% of 64 GiB;
+  build/runtime process-tree RSS peaks were 364.547/375.563 MiB. Including earlier
+  attempts with the default block reserve, runtime peak was 770.016 MiB. No
+  watchdog stop occurred and the 4096/1024 MiB, 65%/68% limits were unchanged.
+
+Evidence directories:
+
+- `/Users/nanami/workspace/2608_uawsom/yinyang-ct-ghost-20261118-d`
+- `/Users/nanami/workspace/2608_uawsom/yinyang-ct-ghost-table-regression-20261118`
+- `/Users/nanami/workspace/2608_uawsom/yinyang-ct-ghost-edge-regression-20261118`
+
+The first attempt's stretched case was rejected because its radial block count
+was odd. The next attempts' refinements were blocked by the predictive memory
+gate before launch. Final tests use two radial blocks, max_blocks=128 (maximum
+54 owned blocks) and a one-second hold to expose short jobs' allocated state to
+the 0.2-second watchdog sampling. The upper angular resolution was reduced from
+64x192 to 48x144 while retaining three refinement levels; failed/blocked attempt
+records are retained separately in the `-a`, `-b`, `-c` directories.
+
+This completes the explicit magnetic ghost-face population plus constraint
+component. Full Yin–Yang MHD CT remains disabled until same-patch/duplicate-edge
+synchronization, radial boundary ordering and cell-centered B/energy conversion
+are integrated and time-evolution/restart accuracy is verified.

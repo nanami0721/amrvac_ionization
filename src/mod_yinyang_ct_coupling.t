@@ -3,17 +3,77 @@ module mod_yinyang_ct_coupling
   use mpi
   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   use mod_yinyang_staggered, only: yy_staggered_table, yy_staggered_build, &
-    yy_staggered_exchange, yy_staggered_basis, yy_edge_location
+    yy_staggered_exchange, yy_staggered_basis, yy_edge_location, yy_face_location
   implicit none
   private
   public :: yy_ct_edge_plan, yy_ct_edge_build, yy_ct_edge_exchange, yy_ct_edge_clear
   public :: yy_ct_edge_quadrature, yy_ct_close_ghosts
+  public :: yy_ct_face_plan, yy_ct_face_build, yy_ct_face_exchange
+  type yy_ct_face_plan
+    type(yy_staggered_table) :: radial, tangent
+    integer,allocatable :: rslot(:),tslot(:)
+    double precision,allocatable :: normals(:,:),rvector(:,:),tvector(:,:)
+    logical,allocatable :: covered(:)
+  end type
   type yy_ct_edge_plan
     type(yy_staggered_table) :: samples
     double precision,allocatable :: line_weights(:,:,:), donor_length(:), scaled(:), vectors(:,:)
     logical,allocatable :: covered(:)
   end type
 contains
+  ! Br is patch-invariant as a scalar; tangential components require rotation.
+  ! This split permits radial wall faces without borrowing physical ghost data.
+  subroutine yy_ct_face_build(plan,comm,patch,bn,nn,radial,angular,directory,centers,directions)
+    type(yy_ct_face_plan),intent(out) :: plan
+    integer,intent(in) :: comm,patch,bn(3),nn(3),directory(:,:),directions(:)
+    double precision,intent(in) :: radial(0:),angular(2,2),centers(:,:)
+    double precision,allocatable :: rp(:,:),tp(:,:)
+    double precision :: frame(3,3)
+    integer :: n,nr,nt,ir,it,c
+    if(size(centers,1)/=3.or.size(centers,2)/=size(directions)) &
+      call edge_error(comm,'invalid face receiver shapes')
+    if(any(directions<1).or.any(directions>3)) call edge_error(comm,'invalid face direction')
+    nr=count(directions==1);nt=size(directions)-nr
+    allocate(rp(3,nr),tp(3,nt),plan%rslot(nr),plan%tslot(nt))
+    allocate(plan%normals(3,size(directions)),plan%covered(size(directions)))
+    allocate(plan%rvector(3,nr),plan%tvector(3,nt))
+    ir=0;it=0
+    do n=1,size(directions)
+      c=directions(n)
+      call yy_staggered_basis(centers(2,n),centers(3,n),patch,frame)
+      plan%normals(:,n)=frame(:,c)
+      if(c==1) then
+        ir=ir+1;rp(:,ir)=centers(:,n);plan%rslot(ir)=n
+      else
+        it=it+1;tp(:,it)=centers(:,n);plan%tslot(it)=n
+      end if
+    end do
+    call yy_staggered_build(plan%radial,comm,patch,yy_face_location,bn,nn,radial,angular,directory,rp, &
+      radial_scalar=.true.)
+    call yy_staggered_build(plan%tangent,comm,patch,yy_face_location,bn,nn,radial,angular,directory,tp)
+    plan%covered(plan%rslot)=plan%radial%covered
+    plan%covered(plan%tslot)=plan%tangent%covered
+  end subroutine
+
+  subroutine yy_ct_face_exchange(plan,radial_samples,tangent_samples,values)
+    type(yy_ct_face_plan),intent(inout) :: plan
+    double precision,intent(in) :: radial_samples(:),tangent_samples(:)
+    double precision,intent(out) :: values(:)
+    integer :: n,t
+    if(size(values)/=size(plan%covered)) call edge_error(plan%radial%comm,'invalid face output size')
+    call yy_staggered_exchange(plan%radial,radial_samples,plan%rvector)
+    call yy_staggered_exchange(plan%tangent,tangent_samples,plan%tvector)
+    values=0.d0
+    do n=1,size(plan%rslot)
+      t=plan%rslot(n)
+      if(plan%covered(t)) values(t)=dot_product(plan%normals(:,t),plan%rvector(:,n))
+    end do
+    do n=1,size(plan%tslot)
+      t=plan%tslot(n)
+      if(plan%covered(t)) values(t)=dot_product(plan%normals(:,t),plan%tvector(:,n))
+    end do
+  end subroutine
+
   subroutine edge_error(comm,message)
     integer,intent(in) :: comm
     character(len=*),intent(in) :: message
