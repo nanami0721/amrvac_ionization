@@ -117,3 +117,10 @@ Yin–Yang geometry path supplies the mesh; no production MHD state is changed a
 no MHD CT evolution is claimed. Debug/optimized builds cover 2/4/6 ranks and
 uniform/stretched radial meshes, and all six full debug dependency libraries are
 compiled. Successful runtime stderr must be empty on repeated calls.
+
+
+The mesh adapter now uses native midpoint quadrature by default. Its constant-
+Cartesian-E expected value is `dt * native_length * dot(E, midpoint_tangent)`.
+The standalone lower-level integral tests retain their two-Gauss-node contract;
+these are distinct, explicit quadrature choices. Integration runs set
+`max_blocks=128` and include all six full debug dimension libraries.

@@ -12,6 +12,11 @@ activation. This is a distinct coordinate identifier; each patch reuses the
 spherical metric and geometric-source implementation. The Yang frame is the
 proper rotation `(x,y,z) -> (-x,z,y)` of the Yin frame.
 
+> CT development update (2026-11-18): actual fixed-grid UCT-HLL integration is
+> available only with `yy_ct_experimental=T` and `ct_stage_split=T`. See
+> `yinyang_ct_stage_api.md` and `tests/yinyang/ct_static` for static-field tests,
+> restrictions and measured errors. Default CT rejection remains intentional.
+
 ## Supported scope
 
 - 3D3V, positive-radius shell; two identical fixed level-one meshes.
@@ -25,7 +30,7 @@ proper rotation `(x,y,z) -> (-x,z,y)` of the Yin frame.
 - Existing radial physical boundary routines; angular external ghosts are
   supplied exclusively by the other patch, including edge/corner ghosts.
 
-AMR, automatic migration/load balancing, local timesteps, CT, B0 splitting,
+AMR, automatic migration/load balancing, local timesteps, non-experimental CT, B0 splitting,
 particles, multigrid, angular periodicity, partial-state exchange, extra/auxiliary
 state and additional HD/MHD source modules other than optional MHD user gravity are rejected.
 Central gravity has passed the equilibrium validation described below; coronal conduction/radiation remain unsupported. User source and boundary callbacks

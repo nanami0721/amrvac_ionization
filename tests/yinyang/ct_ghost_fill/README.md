@@ -59,9 +59,10 @@ This local constraint can increase the magnetic interpolation error coefficient;
 zero ghost divergence alone is not a magnetic-accuracy test. The suite records
 both unconstrained/constrained errors and divergence. It does not establish
 strict cross-patch flux conservation or accuracy of a full MHD time integrator.
-Same-patch ghost synchronization, duplicate edge synchronization, physical radial
-boundary ordering and cell-centered B/energy synchronization still need to be
-integrated before enabling evolving Yin–Yang CT.
+Same-patch ghost/edge synchronization and mixed-corner ordering are now provided
+by the explicit wrappers tested in `../ct_patch_sync`. Physical radial boundary
+ordering, radial-wall edge closure, cell-centered B/energy synchronization and
+production hook integration still precede evolving Yin–Yang CT activation.
 
 ## Reproducible tests
 
@@ -98,3 +99,12 @@ to multiple samples. `max_blocks=128` accommodates the maximum 54 owned blocks
 rather than carrying the default 4000-block reserve on every rank. The runner
 also rejects a refinement if its measured-memory prediction exceeds 950 MiB.
 These sampled limits are not a hard OS memory quota.
+
+The new experimental face-average path is requested explicitly in this test.
+References now use independent Stokes integration of constant/affine-field
+vector potentials, rather than point components. These fields are reproduction
+identities, so the runner checks absolute error <1e-10 instead of fitting an
+order to roundoff. `--identity-only` runs one mesh with uniform/stretched radii
+and 2/4/6 ranks in debug/optimized builds; nonlinear refinement is covered in
+`ct_accuracy`. No ghost donors, protected-face changes, nonreproducible repeated
+fills or nonempty normal runtime stderr are permitted.

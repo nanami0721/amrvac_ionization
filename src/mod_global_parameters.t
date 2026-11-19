@@ -258,6 +258,8 @@ module mod_global_parameters
   !> The MPI communicator
   logical :: yinyang_enabled=.false.
   logical :: yy_radial_boundary_adjust=.false.
+  ! Experimental fixed-grid UCT-HLL integration; disabled by default.
+  logical :: yy_ct_experimental=.false.
   integer :: yy_patch=0, yy_world_rank=0, yy_world_size=1
   integer :: icomm
 

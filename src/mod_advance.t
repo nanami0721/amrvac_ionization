@@ -782,6 +782,7 @@ contains
     use mod_physics
     use mod_eos, only: prepare_eos_w_fields
     use mod_finite_volume, only: finite_volume
+    use mod_yinyang, only: yy_runtime_ct_edges
     use mod_usr_methods, only: usr_ct_stage
     use mod_comm_lib, only: mpistop
 
@@ -841,6 +842,11 @@ contains
         if(lb_diagnose) ct_exchange_start=MPI_WTIME()
         call usr_ct_stage(qtC,qdt,psa,psb,stage_fluxes)
         if(lb_diagnose) ct_exchange_seconds=MPI_WTIME()-ct_exchange_start
+      end if
+      if(yy_ct_experimental) then
+        if(lb_diagnose) ct_exchange_start=MPI_WTIME()
+        call yy_runtime_ct_edges(psa,stage_fluxes)
+        if(lb_diagnose) ct_exchange_seconds=ct_exchange_seconds+MPI_WTIME()-ct_exchange_start
       end if
       !$OMP PARALLEL DO PRIVATE(igrid)
       do iigrid=1,igridstail_active

@@ -281,7 +281,7 @@ module mod_mhd_phys
   public :: mhd_e_to_ei
   public :: mhd_ei_to_e
   public :: mhd_semirelati_vel_emech, mhd_semirelati_p, mhd_semirelati_eint
-  public :: mhd_face_to_center
+  public :: mhd_face_to_center, mhd_ct_sync_center
   public :: get_divb
   public :: get_current
   !> needed  public if we want to use the ambipolar coefficient in the user file
@@ -898,6 +898,8 @@ contains
       case default
         call mpistop('choose average, uct_contact,or uct_hll for type_ct!')
       end select
+      if(total_energy.and..not.B0field.and..not.mhd_semirelativistic) &
+        phys_ct_sync_center => mhd_ct_sync_center
       phys_face_to_center => mhd_face_to_center
       phys_modify_wLR => mhd_modify_wLR
     else if(ndim>1) then
@@ -1496,8 +1498,13 @@ contains
       call MPI_ALLREDUCE(yy_adjust_local,yy_adjust_global,1, &
         MPI_INTEGER,MPI_MAX,MPI_COMM_WORLD,ierrmpi)
       yy_radial_boundary_adjust=yy_adjust_global/=0
-      if(.not.mhd_glm.or.type_divb/=divb_glm.or..not.mhd_energy.or..not.total_energy) &
-        call mpistop('yinyang MHD requires GLM and total energy')
+      if(yy_ct_experimental) then
+        if(type_divb/=divb_ct.or..not.mhd_energy.or..not.total_energy) &
+          call mpistop('Yin-Yang CT requires CT and total energy')
+      else
+        if(.not.mhd_glm.or.type_divb/=divb_glm.or..not.mhd_energy.or..not.total_energy) &
+          call mpistop('yinyang MHD requires GLM and total energy')
+      end if
       if(mhd_semirelativistic.or.mhd_internal_e.or.mhd_hydrodynamic_e.or.mhd_uawsom.or. &
          mhd_radiative_transfer.or.mhd_radiative_cooling.or.mhd_radiation_fld.or. &
          mhd_thermal_conduction.or.mhd_hyperbolic_tc.or.mhd_trac.or. &
@@ -8907,6 +8914,29 @@ contains
   end subroutine get_ambipolar_electric_field
 
   !> calculate cell-center values from face-center values
+  ! Explicit CT synchronization: active cells retain total energy; ghost cells
+  ! may retain thermal energy by compensating only the magnetic-energy change.
+  ! No floor or primitive conversion is applied, and existing CT paths are unchanged.
+  subroutine mhd_ct_sync_center(ixO^L,s,keep_pressure)
+    use mod_global_parameters
+    integer,intent(in) :: ixO^L
+    type(state),intent(inout) :: s
+    logical,intent(in) :: keep_pressure
+    double precision :: oldb(ixO^S,ndir),delta
+    integer :: ix^D
+    if(B0field.or.mhd_semirelativistic.or..not.total_energy) &
+      call mpistop('CT energy sync requires unsplit classical total-energy MHD')
+    if(keep_pressure) oldb(ixO^S,:)=s%w(ixO^S,mag(:))
+    call mhd_face_to_center(ixO^L,s)
+    if(keep_pressure) then
+      {do ix^DB=ixOmin^DB,ixOmax^DB\}
+        delta=zero
+        {^C& delta=delta+half*(s%w(ix^D,mag(^C))-oldb(ix^D,^C))*(s%w(ix^D,mag(^C))+oldb(ix^D,^C))\}
+        s%w(ix^D,e_)=s%w(ix^D,e_)+delta
+      {end do\}
+    end if
+  end subroutine mhd_ct_sync_center
+
   subroutine mhd_face_to_center(ixO^L,s)
     use mod_global_parameters
     ! Non-staggered interpolation range

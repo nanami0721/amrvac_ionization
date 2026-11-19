@@ -29,7 +29,7 @@ def job(name,cmd,cwd,limit=1024):
  status[name]=proc.returncode;(r/'status.json').write_text(json.dumps(status,indent=2));print(name,proc.returncode,flush=True)
  if proc.returncode:raise SystemExit(proc.returncode)
 compiler='F90=mpif90 --param ggc-min-expand=5 --param ggc-min-heapsize=4096'
-par=(s/'tests/yinyang/rho/amrvac.par').read_text().replace('it_max=5','it_max=0')
+par=(s/'tests/yinyang/rho/amrvac.par').read_text().replace('it_max=5','it_max=0').replace('&meshlist','&meshlist\n max_blocks=128')
 for arch in ['debug','default']:
  d=r/arch;d.mkdir();shutil.copy2(b/'tests/yinyang/ct_coupling/mod_usr.t',d/'mod_usr.t');(d/'amrvac.par').write_text(par)
  job('setup-'+arch,[b/'setup.pl','-d=3','-arch='+arch],d)

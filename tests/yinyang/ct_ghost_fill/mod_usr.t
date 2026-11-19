@@ -39,7 +39,7 @@ contains
       allocate(probe(g)%ws(ixGlo1-1:ixGhi1,ixGlo2-1:ixGhi2,ixGlo3-1:ixGhi3,3))
       probe(g)%surfaceC=>ps(g)%surfaceC;probe(g)%dvolume=>ps(g)%dvolume
     end do
-    call yy_prepare_ct_ghosts(plan,ps)
+    call yy_prepare_ct_ghosts(plan,ps,face_moments=.true.)
     do p=1,2
       if(p==1)then
         t=size(plan%faces%radial%request,2)
@@ -155,17 +155,45 @@ contains
     close(u)
   contains
     subroutine face_value(g,idx,c,field,value)
-      integer,intent(in)::g,idx(3),c,field
-      double precision,intent(out)::value
-      integer::above(3)
-      double precision::offset(3),coord(3),frame(3,3),xyz(3),vec(3)
-      above=max(idx,[ixGlo1,ixGlo2,ixGlo3]);offset=0.d0;offset(c)=0.5d0
-      if(idx(c)<above(c))offset(c)=-0.5d0
-      coord=ps(g)%x(above(1),above(2),above(3),:)+offset*ps(g)%dx(above(1),above(2),above(3),:)
-      call yy_basis(coord(2),coord(3),yy_patch,frame);xyz=coord(1)*frame(:,1)
-      vec=[0.2d0,-0.3d0,0.5d0]
-      if(field==1)vec=[xyz(2),xyz(3),xyz(1)]
-      value=dot_product(vec,frame(:,c))
+      integer,intent(in) :: g,idx(3),c,field
+      double precision,intent(out) :: value
+      integer :: d,e,below(3)
+      double precision :: upper,lower
+      value=0.d0
+      do d=1,3
+        do e=1,3
+          if(lvc(c,d,e)==0)cycle
+          below=idx;below(d)=below(d)-1
+          call potential_edge(g,idx,e,field,upper)
+          call potential_edge(g,below,e,field,lower)
+          value=value+lvc(c,d,e)*(upper-lower)
+        end do
+      end do
+      value=value/ps(g)%surfaceC(idx(1),idx(2),idx(3),c)
+    end subroutine
+    subroutine potential_edge(g,idx,c,field,value)
+      integer,intent(in) :: g,idx(3),c,field
+      double precision,intent(out) :: value
+      double precision,parameter :: nodes(4)=[-.861136311594052575d0,-.339981043584856265d0, &
+        .339981043584856265d0,.861136311594052575d0]
+      double precision,parameter :: weights(4)=[.347854845137453857d0,.652145154862546143d0, &
+        .652145154862546143d0,.347854845137453857d0]
+      integer :: above(3),q
+      double precision :: off(3),pos(3),x(3),b(3,3),xyz(3),v(3),avec(3),jac,width
+      above=max(idx,[ixGlo1,ixGlo2,ixGlo3]);off=.5d0;off(c)=0.d0
+      off=off+dble(idx-above)
+      pos=ps(g)%x(above(1),above(2),above(3),:)+off*ps(g)%dx(above(1),above(2),above(3),:)
+      width=ps(g)%dx(above(1),above(2),above(3),c);value=0.d0
+      do q=1,4
+        x=pos;x(c)=x(c)+.5d0*width*nodes(q)
+        call yy_basis(x(2),x(3),yy_patch,b);xyz=x(1)*b(:,1)
+        v=[.2d0,-.3d0,.5d0];if(field==1)v=[xyz(2),xyz(3),xyz(1)]
+        avec=[v(2)*xyz(3)-v(3)*xyz(2),v(3)*xyz(1)-v(1)*xyz(3),v(1)*xyz(2)-v(2)*xyz(1)]
+        avec=avec/2.d0;if(field==1)avec=avec*(2.d0/3.d0)
+        jac=1.d0;if(c==2)jac=x(1)
+        if(c==3)jac=x(1)*sin(x(2))
+        value=value+.5d0*width*weights(q)*jac*dot_product(avec,b(:,c))
+      end do
     end subroutine
   end subroutine
 end module

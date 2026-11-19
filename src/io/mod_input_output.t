@@ -1,6 +1,6 @@
 !> Module for reading input and writing output
 module mod_input_output
-  use mod_yinyang, only: yy_checkpoint, yy_checkpoint_begin
+  use mod_yinyang, only: yy_checkpoint, yy_checkpoint_begin, yy_ct_face_moments
   use mod_comm_lib, only: mpistop
   use mod_basic_types, only: name_len
 
@@ -261,7 +261,7 @@ contains
 
     namelist /methodlist/ time_stepper, time_integrator, &
          source_split_usr, typesourcesplit, local_timestep, &
-         dimsplit, typedimsplit, flux_scheme, limit_on_wold, ct_stage_split, &
+         dimsplit, typedimsplit, flux_scheme, limit_on_wold, ct_stage_split, yy_ct_experimental, yy_ct_face_moments, &
          limiter, gradient_limiter, cada3_radius, &
          loglimit, typeboundspeed, H_correction, &
          typetvd, typeentropy, entropycoef, typeaverage, &
@@ -499,6 +499,8 @@ contains
     time_integrator = 'default'
     limit_on_wold   = .false.
     ct_stage_split = .false.
+    yy_ct_experimental = .false.
+    yy_ct_face_moments = .false.
     ! default PC or explicit midpoint, hence alfa=0.5
     rk2_alfa        = half 
     ! default IMEX-RK22Ln hence lambda = 1 - 1/sqrt(2)

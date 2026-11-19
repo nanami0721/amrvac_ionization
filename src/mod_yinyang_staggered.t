@@ -74,20 +74,36 @@ contains
   ! face components or tangent edge components, NOT dt*length edge integrals.
   ! Request rows: local block ID, three zero-based local cell indices, component.
   ! An index -1 denotes the physical lower face/edge, not an unfilled ghost donor.
-  subroutine yy_staggered_build(t,comm,patch,family,bn,nn,radial,angular,directory,points,radial_scalar)
+  subroutine yy_staggered_build(t,comm,patch,family,bn,nn,radial,angular,directory,points,radial_scalar,edge_radial_extrapolate,face_widths,face_directions)
     type(yy_staggered_table),intent(inout) :: t
     integer,intent(in) :: comm,patch,family,bn(3),nn(3),directory(:,:)
     double precision,intent(in) :: radial(0:),angular(2,2),points(:,:)
-    logical,optional,intent(in) :: radial_scalar
+    logical,optional,intent(in) :: radial_scalar,edge_radial_extrapolate
+    double precision,optional,intent(in) :: face_widths(:,:)
+    integer,optional,intent(in) :: face_directions(:)
     integer :: np,rank,ierr,n,p,c,q,a,b,d,h,pass,target,base(3),idx(3),bc(3),loc(3),components
     integer :: qrank(24),qreq(5,24),owner,nt,ns,nr,off,ib,nb(3),lo,hi,mid
     integer,allocatable :: owners(:,:,:,:),ids(:,:,:,:),cursor(:),out(:,:),idmap(:)
     double precision :: xyz(3),v(3),sph(3),step(2),offset(3),f(3),u,coord(3),frame(3,3)
     double precision :: w(24),basis(3,24),normal(3,3),inv(3,3),det,left,right,x,tolerance
-    logical :: valid,scalar
+    logical :: valid,scalar,extrapolate,moments
+    double precision :: design(24,11),target_row(11),fit(24),width(3),scale
+    integer :: fit_status
     call yy_staggered_clear(t)
+    extrapolate=.false.
+    if(present(edge_radial_extrapolate)) extrapolate=edge_radial_extrapolate
+    if(extrapolate.and.family/=yy_edge_location) call fail(comm,10)
     scalar=.false.
     if(present(radial_scalar)) scalar=radial_scalar
+    moments=present(face_widths).and.present(face_directions)
+    if(present(face_widths).neqv.present(face_directions))call fail(comm,12)
+    if(moments)then
+      if(family/=yy_face_location.or.scalar)call fail(comm,10)
+      if(size(face_widths,1)/=3.or.size(face_widths,2)/=size(points,2).or. &
+        size(face_directions)/=size(points,2))call fail(comm,12)
+      if(any(face_directions<1).or.any(face_directions>3).or.any(face_widths<=0.d0))call fail(comm,12)
+      if(.not.all(ieee_is_finite(face_widths)))call fail(comm,25)
+    end if
     components=3
     if(scalar) then
       if(family/=yy_face_location) call fail(comm,10)
@@ -131,6 +147,10 @@ contains
         if(patch==0) v=[-xyz(1),xyz(3),xyz(2)]
         sph=[points(1,target),atan2(sqrt(v(1)**2+v(2)**2),v(3)),atan2(v(2),v(1))]
         valid=.true.;q=0
+        if(moments)then
+          scale=max(face_widths(1,target),points(1,target)*maxval(step))
+          call face_row(patch,face_directions(target),points(:,target),face_widths(:,target),xyz,scale,target_row)
+        end if
         do c=1,components
           call yy_staggered_offset(family,c,offset)
           ! Bracket the shared nonuniform radial mesh without extrapolation.
@@ -139,10 +159,19 @@ contains
           left=radial_sample(lo,offset(1));right=radial_sample(hi,offset(1))
           x=sph(1)
           tolerance=1.d-12*max(1.d0,abs(left),abs(right))
+          ! Optional one-sided linear closure only for radially centered E_r.
+          ! It uses the first/last two physical samples, never ghost donors.
+          if((extrapolate.and.c==1).or.moments) then
+            if(x<radial(0)-tolerance.or.x>radial(nn(1))+tolerance) then
+              valid=.false.;exit
+            end if
+            x=max(radial(0),min(radial(nn(1)),x))
+          else
           if(x<left-tolerance.or.x>right+tolerance) then
             valid=.false.;exit
           end if
           x=max(left,min(right,x))
+          end if
           do while(hi-lo>1)
             mid=(lo+hi)/2
             if(radial_sample(mid,offset(1))<=x) then
@@ -151,10 +180,20 @@ contains
               hi=mid
             end if
           end do
+          ! A positive-weight fit uses both sides even at a lattice node.
+          ! Canonicalize ties so roundoff cannot select a different stencil.
+          if(moments)then
+            if(abs(x-radial_sample(lo+1,offset(1)))<=tolerance)then
+              x=radial_sample(lo+1,offset(1));lo=min(lo+1,nn(1)-2)
+            else if(abs(x-radial_sample(lo,offset(1)))<=tolerance)then
+              x=radial_sample(lo,offset(1))
+            end if
+          end if
           base(1)=lo;left=radial_sample(lo,offset(1));right=radial_sample(lo+1,offset(1))
           f(1)=(x-left)/(right-left)
           do d=2,3
             u=(sph(d)-angular(d-1,1))/step(d-1)-offset(d)
+            if(moments.and.abs(u-dble(nint(u)))<1.d-12)u=dble(nint(u))
             lo=0;if(offset(d)==1.d0) lo=-1
             if(u<lo-1.d-12.or.u>nn(d)-1+1.d-12) then
               valid=.false.;exit
@@ -173,6 +212,11 @@ contains
                 coord=[radial_sample(idx(1),offset(1)),angular(:,1)+(idx(2:3)+offset(2:3))*step]
                 call yy_staggered_basis(coord(2),coord(3),1-patch,frame)
                 basis(:,q)=frame(:,c)
+                if(moments)then
+                  width=[1.d0,step]
+                  if(c/=1)width(1)=radial(idx(1)+1)-radial(idx(1))
+                  call face_row(1-patch,c,coord,width,xyz,scale,design(q,:))
+                end if
               end do
             end do
           end do
@@ -186,7 +230,17 @@ contains
         else
           ! Weighted Cartesian constant fit. Normalization makes any uniform
           ! Cartesian vector exact despite non-collocated component samples.
-          if(.not.scalar) then
+          if(moments)then
+            ! Keep locality of the trilinear stencil without zero-weight rank loss.
+            ! A small positive floor supplies off-plane derivative information.
+            w=sqrt(max(w,1.d-2))
+            do q=1,t%stencil
+              design(q,:)=w(q)*design(q,:)
+            end do
+            call face_fit(design,target_row,fit,fit_status)
+            fit=fit*w
+            if(fit_status/=0)call fail(comm,18)
+          else if(.not.scalar) then
           normal=0.d0
           do q=1,t%stencil
             do d=1,3
@@ -203,7 +257,10 @@ contains
           do q=1,t%stencil
             p=qrank(q);off=t%sd(p)+cursor(p)+1;cursor(p)=cursor(p)+1
             out(:,off)=qreq(:,q);t%slot(q,target)=off
-            if(scalar) then
+            if(moments)then
+              call yy_staggered_basis(points(2,target),points(3,target),patch,frame)
+              t%coefficient(:,q,target)=fit(q)*frame(:,face_directions(target))
+            else if(scalar) then
               ! Br is a scalar under patch rotation at a fixed physical point.
               ! Its own face lattice reaches radial walls without extrapolation.
               t%coefficient(:,q,target)=w(q)*xyz/points(1,target)
@@ -269,6 +326,82 @@ contains
         cartesian(:,n)=cartesian(:,n)+t%coefficient(:,q,n)*t%recv(t%slot(q,n))
       end do
     end do
+  end subroutine
+
+  ! Face-average moments of B(x)=b+G*(x-origin)/scale with trace(G)=0.
+  ! Four-point Gauss integration in each surface coordinate; normalized by the
+  ! analytic native spherical face area. Used only during table construction.
+  pure subroutine face_row(patch,c,center,width,origin,scale,row)
+    integer,intent(in) :: patch,c
+    double precision,intent(in) :: center(:),width(:),origin(:),scale
+    double precision,intent(out) :: row(:)
+    double precision,parameter :: nodes(4)=[-.861136311594052575d0,-.339981043584856265d0, &
+      .339981043584856265d0,.861136311594052575d0]
+    double precision,parameter :: weights(4)=[.347854845137453857d0,.652145154862546143d0, &
+      .652145154862546143d0,.347854845137453857d0]
+    double precision :: x(3),frame(3,3),offset(3),normal(3),mom(3,3),jac,area,w
+    integer :: a,b,d,e,j,k,n
+    d=mod(c,3)+1;e=mod(c+1,3)+1;row=0.d0;mom=0.d0
+    do b=1,4
+      do a=1,4
+        x=center;x(d)=x(d)+.5d0*width(d)*nodes(a);x(e)=x(e)+.5d0*width(e)*nodes(b)
+        call yy_staggered_basis(x(2),x(3),patch,frame)
+        offset=(x(1)*frame(:,1)-origin)/scale;normal=frame(:,c)
+        select case(c)
+        case(1);jac=x(1)**2*sin(x(2))
+        case(2);jac=x(1)*sin(x(2))
+        case(3);jac=x(1)
+        end select
+        w=.25d0*width(d)*width(e)*weights(a)*weights(b)*jac
+        row(1:3)=row(1:3)+w*normal
+        do k=1,3
+          mom(:,k)=mom(:,k)+w*normal*offset(k)
+        end do
+      end do
+    end do
+    select case(c)
+    case(1);area=center(1)**2*2.d0*sin(center(2))*sin(.5d0*width(2))*width(3)
+    case(2);area=center(1)*width(1)*sin(center(2))*width(3)
+    case(3);area=center(1)*width(1)*width(2)
+    end select
+    n=3
+    do k=1,3
+      do j=1,3
+        if(j==3.and.k==3)cycle
+        n=n+1;row(n)=mom(j,k)
+        if(j==k)row(n)=row(n)-mom(3,3)
+      end do
+    end do
+    row=row/area
+  end subroutine
+
+  ! Reorthogonalized QR avoids squaring the fit condition number. All 24 face
+  ! samples have positive weights, including when a target lies on a lattice.
+  pure subroutine face_fit(design,target,coefficient,status)
+    double precision,intent(in) :: design(24,11),target(11)
+    double precision,intent(out) :: coefficient(24)
+    integer,intent(out) :: status
+    double precision :: q(24,11),r(11,11),z(11),projection
+    integer :: i,j,pass
+    q=design;r=0.d0;z=0.d0;coefficient=0.d0;status=0
+    do j=1,11
+      do pass=1,2
+        do i=1,j-1
+          projection=dot_product(q(:,i),q(:,j));r(i,j)=r(i,j)+projection
+          q(:,j)=q(:,j)-projection*q(:,i)
+        end do
+      end do
+      r(j,j)=sqrt(sum(q(:,j)**2))
+      if(r(j,j)<1.d-10)then
+        status=1;return
+      end if
+      q(:,j)=q(:,j)/r(j,j)
+    end do
+    do j=1,11
+      z(j)=(target(j)-dot_product(r(1:j-1,j),z(1:j-1)))/r(j,j)
+    end do
+    coefficient=matmul(q,z)
+    if(maxval(abs(matmul(transpose(design),coefficient)-target))>1.d-10)status=2
   end subroutine
 
   pure function cross(a,b) result(c)

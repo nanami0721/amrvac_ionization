@@ -3,12 +3,17 @@ module mod_yinyang
   use mod_yinyang_staggered, only: yy_staggered_table, yy_staggered_build
   use mod_yinyang_ct_coupling, only: yy_ct_edge_plan, yy_ct_edge_build, yy_ct_edge_exchange, &
     yy_ct_face_plan, yy_ct_face_build, yy_ct_face_exchange, yy_ct_close_ghosts
+  use mod_yinyang_patch_sync, only: yy_patch_copy_plan, yy_patch_copy_build, yy_patch_copy_exchange, &
+    yy_sync_edges, yy_sync_faces, yy_sync_extended_faces
   use mod_global_parameters
-  use mod_physics, only: phys_to_primitive, phys_to_conserved, physics_type
+  use mod_physics, only: phys_to_primitive, phys_to_conserved, physics_type, &
+    phys_ct_sync_center,phys_get_ct_edges,phys_apply_ct_edges
   use mod_comm_lib, only: mpistop
   use mod_forest, only: particle_mesh_epoch
   implicit none
   private
+  ! Owned here: only input parsing and Yin-Yang initialization use this option.
+  logical,public :: yy_ct_face_moments=.false.
   public :: yy_validate, yy_exchange, yy_basis, yy_position, yy_checkpoint, yy_checkpoint_begin, yy_report
   public :: yy_build_staggered_table, yy_prepare_ct_edges, yy_exchange_ct_edges, yy_ct_stage_plan
   public :: yy_ct_ghost_plan, yy_prepare_ct_ghosts, yy_fill_ct_ghosts
@@ -18,12 +23,23 @@ module mod_yinyang
     double precision,allocatable :: radial(:),tangent(:),values(:)
     integer(kind=8) :: mesh_epoch=-1_8
   end type
+  public :: yy_ct_patch_plan, yy_prepare_ct_patch, yy_sync_ct_edges, yy_ordered_ct_edges
+  public :: yy_sync_ct_faces, yy_ordered_ct_ghosts, yy_ct_edge_is_owner
+  public :: yy_complete_ct_faces, yy_sync_ct_state, yy_ct_radial_faces
+  type yy_ct_patch_plan
+    type(yy_patch_copy_plan) :: edge,interior_faces,extended_faces
+    integer(kind=8) :: mesh_epoch=-1_8
+  end type
   type yy_ct_stage_plan
     type(yy_ct_edge_plan) :: edge
     integer,allocatable :: receivers(:,:)
     double precision,allocatable :: packed(:), received(:)
     integer(kind=8) :: mesh_epoch=-1_8
   end type
+  public :: yy_runtime_ct_edges, yy_runtime_ct_ghosts, yy_ct_radial_cells
+  type(yy_ct_patch_plan),save :: runtime_patch
+  type(yy_ct_stage_plan),save :: runtime_edges
+  type(yy_ct_ghost_plan),save :: runtime_ghosts
   integer(kind=8) :: epoch=-1_8
   integer :: nr=0, ns=0, nt=0, raw_nr=0
   integer(kind=8) :: exchange_calls=0_8
@@ -96,11 +112,13 @@ contains
 
   ! Receiver rows are local block ID, native i,j,k and direction. Select only
   ! desired interface edges; uncomputed UCT workspace may never be a donor.
-  subroutine yy_prepare_ct_edges(plan,s,receivers)
+  subroutine yy_prepare_ct_edges(plan,s,receivers,radial_extrapolate,native_midpoint)
     type(yy_ct_stage_plan),intent(out) :: plan
     type(state),intent(in) :: s(max_blocks)
     integer,intent(in) :: receivers(:,:)
+    logical,optional,intent(in) :: radial_extrapolate,native_midpoint
     {^IFTHREED
+    logical :: midpoint
     integer :: nn(3),bn(3),n,g,c,idx(3),lo(3),hi(3)
     integer,allocatable :: directory(:,:)
     double precision,allocatable :: radial(:),centers(:,:),widths(:)
@@ -118,8 +136,9 @@ contains
       centers(:,n)=s(g)%x(idx(1),idx(2),idx(3),:)+offset*s(g)%dx(idx(1),idx(2),idx(3),:)
       widths(n)=s(g)%dx(idx(1),idx(2),idx(3),c)
     end do
+    midpoint=.true.;if(present(native_midpoint))midpoint=native_midpoint
     call yy_ct_edge_build(plan%edge,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
-      centers,widths,receivers(5,:))
+      centers,widths,receivers(5,:),radial_extrapolate,native_midpoint=midpoint)
     if(any(.not.plan%edge%covered)) call mpistop('CT edge lacks full donors: boundary closure required')
     do n=1,size(plan%edge%samples%request,2)
       idx=plan%edge%samples%request(2:4,n)+[ixMlo1,ixMlo2,ixMlo3]
@@ -169,14 +188,16 @@ contains
 
   ! Enumerate the union of faces bounding external angular ghost cells. Active
   ! faces, including active-boundary anchors, are excluded before interpolation.
-  subroutine yy_prepare_ct_ghosts(plan,s)
+  subroutine yy_prepare_ct_ghosts(plan,s,face_moments)
     type(yy_ct_ghost_plan),intent(out) :: plan
     type(state),intent(in) :: s(max_blocks)
+    logical,optional,intent(in) :: face_moments
     {^IFTHREED
     integer :: bn(3),nn(3),n,g,i,j,k,c,d,side,pass,t,idx(3),above(3),lo(3),hi(3),fl(3),pig(3),nb(3)
     integer,allocatable :: directory(:,:)
+    logical :: moments
     logical :: sides(2,2),selected,mask(ixGlo1-1:ixGhi1,ixGlo2-1:ixGhi2,ixGlo3-1:ixGhi3,3)
-    double precision,allocatable :: radial(:),centers(:,:)
+    double precision,allocatable :: radial(:),centers(:,:),widths(:,:)
     double precision :: angular(2,2),offset(3)
     call yy_staggered_mesh(s,bn,nn,radial,angular,directory)
     lo=[ixMlo1,ixMlo2,ixMlo3];hi=[ixMhi1,ixMhi2,ixMhi3];nb=nn/bn
@@ -217,6 +238,7 @@ contains
                 ! Lower outer face has no center x at index zero. Locate it
                 ! from the adjacent cell center, not from uninitialized x.
                 if(idx(c)<above(c)) offset(c)=-0.5d0
+                widths(:,t)=s(g)%dx(above(1),above(2),above(3),:)
                 centers(:,t)=s(g)%x(above(1),above(2),above(3),:)+ &
                   offset*s(g)%dx(above(1),above(2),above(3),:)
               end do
@@ -224,10 +246,16 @@ contains
           end do
         end do
       end do
-      if(pass==1) allocate(plan%receivers(5,t),centers(3,t),plan%values(t))
+      if(pass==1) allocate(plan%receivers(5,t),centers(3,t),widths(3,t),plan%values(t))
     end do
-    call yy_ct_face_build(plan%faces,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
-      centers,plan%receivers(5,:))
+    moments=.false.;if(present(face_moments))moments=face_moments
+    if(moments)then
+      call yy_ct_face_build(plan%faces,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
+        centers,plan%receivers(5,:),widths)
+    else
+      call yy_ct_face_build(plan%faces,MPI_COMM_WORLD,yy_patch,bn,nn,radial,angular,directory, &
+        centers,plan%receivers(5,:))
+    end if
     if(any(.not.plan%faces%covered)) call mpistop('magnetic ghost face lacks donors: increase overlap')
     allocate(plan%radial(size(plan%faces%radial%request,2)),plan%tangent(size(plan%faces%tangent%request,2)))
     plan%mesh_epoch=particle_mesh_epoch
@@ -255,7 +283,8 @@ contains
     end do
     do n=1,size(plan%radial)
       g=plan%faces%radial%request(1,n);idx=plan%faces%radial%request(2:4,n)+lo
-      plan%radial(n)=s(g)%ws(idx(1),idx(2),idx(3),1)
+      c=plan%faces%radial%request(5,n)
+      plan%radial(n)=s(g)%ws(idx(1),idx(2),idx(3),c)
     end do
     do n=1,size(plan%tangent)
       g=plan%faces%tangent%request(1,n);idx=plan%faces%tangent%request(2:4,n)+lo
@@ -280,6 +309,311 @@ contains
     }
     {^IFONED call mpistop('magnetic ghost fill requires 3D') }
     {^IFTWOD call mpistop('magnetic ghost fill requires 3D') }
+  end subroutine
+
+  subroutine yy_prepare_ct_patch(plan,s)
+    type(yy_ct_patch_plan),intent(out) :: plan
+    type(state),intent(in) :: s(max_blocks)
+    integer :: bn(3),nn(3)
+    integer,allocatable :: directory(:,:)
+    double precision,allocatable :: radial(:)
+    double precision :: angular(2,2)
+    call yy_staggered_mesh(s,bn,nn,radial,angular,directory)
+    call yy_patch_copy_build(plan%edge,MPI_COMM_WORLD,yy_patch,yy_sync_edges,bn,nn,nghostcells,directory)
+    call yy_patch_copy_build(plan%interior_faces,MPI_COMM_WORLD,yy_patch,yy_sync_faces,bn,nn,nghostcells,directory)
+    call yy_patch_copy_build(plan%extended_faces,MPI_COMM_WORLD,yy_patch,yy_sync_extended_faces, &
+      bn,nn,nghostcells,directory)
+    plan%mesh_epoch=particle_mesh_epoch
+  end subroutine
+
+  logical function yy_ct_edge_is_owner(g,idx,c) result(owner)
+    integer,intent(in) :: g,idx(3),c
+    {^IFTHREED
+    integer :: d,lo(3),pig(3)
+    lo=[ixMlo1,ixMlo2,ixMlo3];pig=[node(pig1_,g),node(pig2_,g),node(pig3_,g)]
+    owner=.true.
+    do d=1,3
+      if(d==c) cycle
+      if(idx(d)==lo(d)-1.and.pig(d)>1) owner=.false.
+    end do
+    }
+    {^IFONED owner=.false. }
+    {^IFTWOD owner=.false. }
+  end function
+
+  subroutine yy_sync_ct_edges(plan,fluxes)
+    type(yy_ct_patch_plan),intent(inout) :: plan
+    type(ct_stage_flux),intent(inout) :: fluxes(:)
+    {^IFTHREED
+    integer :: n,g,c,idx(3),lo(3)
+    if(plan%mesh_epoch/=particle_mesh_epoch) call mpistop('CT patch plan is stale')
+    if(.not.allocated(plan%edge%send)) call mpistop('CT patch plan has not been built')
+    if(size(fluxes)<max_blocks) call mpistop('CT stage array is too small')
+    lo=[ixMlo1,ixMlo2,ixMlo3]
+    do n=1,size(plan%edge%send)
+      g=plan%edge%request(1,n);idx=plan%edge%request(2:4,n)+lo;c=plan%edge%request(5,n)
+      if(.not.allocated(fluxes(g)%edge)) call mpistop('CT patch donor workspace missing')
+      plan%edge%send(n)=fluxes(g)%edge(idx(1),idx(2),idx(3),c)
+    end do
+    call yy_patch_copy_exchange(plan%edge)
+    do n=1,size(plan%edge%recv)
+      g=plan%edge%receivers(1,n);idx=plan%edge%receivers(2:4,n)+lo;c=plan%edge%receivers(5,n)
+      if(.not.allocated(fluxes(g)%edge)) call mpistop('CT patch receiver workspace missing')
+      fluxes(g)%edge(idx(1),idx(2),idx(3),c)=plan%edge%recv(n)
+    end do
+    }
+    {^IFONED call mpistop('CT patch sync requires 3D') }
+    {^IFTWOD call mpistop('CT patch sync requires 3D') }
+  end subroutine
+
+  ! The overset receiver list must select geometric owners. Otherwise the final
+  ! same-patch broadcast would erase an update applied only to a non-owner copy.
+  subroutine yy_ordered_ct_edges(patch_plan,cross_plan,fluxes)
+    type(yy_ct_patch_plan),intent(inout) :: patch_plan
+    type(yy_ct_stage_plan),intent(inout) :: cross_plan
+    type(ct_stage_flux),intent(inout) :: fluxes(:)
+    integer :: n
+    if(.not.allocated(cross_plan%receivers)) call mpistop('CT cross-patch plan has not been built')
+    do n=1,size(cross_plan%receivers,2)
+      if(.not.yy_ct_edge_is_owner(cross_plan%receivers(1,n),cross_plan%receivers(2:4,n), &
+        cross_plan%receivers(5,n))) call mpistop('CT overset receiver must be the geometric owner')
+    end do
+    call yy_sync_ct_edges(patch_plan,fluxes)
+    call yy_exchange_ct_edges(cross_plan,fluxes)
+    call yy_sync_ct_edges(patch_plan,fluxes)
+  end subroutine
+
+  subroutine yy_sync_ct_faces(plan,s,extended)
+    type(yy_ct_patch_plan),target,intent(inout) :: plan
+    type(state),intent(inout) :: s(max_blocks)
+    logical,intent(in) :: extended
+    {^IFTHREED
+    type(yy_patch_copy_plan),pointer :: table
+    integer :: n,g,c,idx(3),lo(3)
+    if(plan%mesh_epoch/=particle_mesh_epoch) call mpistop('CT patch plan is stale')
+    if(extended) then
+      table=>plan%extended_faces
+    else
+      table=>plan%interior_faces
+    end if
+    if(.not.allocated(table%send)) call mpistop('CT face sync plan has not been built')
+    lo=[ixMlo1,ixMlo2,ixMlo3]
+    do n=1,size(table%send)
+      g=table%request(1,n);idx=table%request(2:4,n)+lo;c=table%request(5,n)
+      if(.not.allocated(s(g)%ws)) call mpistop('CT face donor state missing')
+      table%send(n)=s(g)%ws(idx(1),idx(2),idx(3),c)
+    end do
+    call yy_patch_copy_exchange(table)
+    do n=1,size(table%recv)
+      g=table%receivers(1,n);idx=table%receivers(2:4,n)+lo;c=table%receivers(5,n)
+      if(.not.allocated(s(g)%ws)) call mpistop('CT face receiver state missing')
+      s(g)%ws(idx(1),idx(2),idx(3),c)=table%recv(n)
+    end do
+    }
+    {^IFONED call mpistop('CT face sync requires 3D') }
+    {^IFTWOD call mpistop('CT face sync requires 3D') }
+  end subroutine
+
+  subroutine yy_ordered_ct_ghosts(patch_plan,cross_plan,s)
+    type(yy_ct_patch_plan),intent(inout) :: patch_plan
+    type(yy_ct_ghost_plan),intent(inout) :: cross_plan
+    type(state),intent(inout) :: s(max_blocks)
+    call yy_sync_ct_faces(patch_plan,s,.false.)
+    call yy_fill_ct_ghosts(cross_plan,s,.true.)
+    call yy_sync_ct_faces(patch_plan,s,.true.)
+  end subroutine
+
+  ! First finish angular faces, then radial physical halos across the entire
+  ! angular extent, including corners. Cell thermodynamic halos must already be
+  ! populated (ordinary/overset exchange) before this explicit routine is called.
+  subroutine yy_complete_ct_faces(patch_plan,cross_plan,s)
+    type(yy_ct_patch_plan),intent(inout) :: patch_plan
+    type(yy_ct_ghost_plan),intent(inout) :: cross_plan
+    type(state),intent(inout) :: s(max_blocks)
+    call yy_ordered_ct_ghosts(patch_plan,cross_plan,s)
+    call yy_ct_radial_faces(s)
+  end subroutine
+
+  ! Explicit radial face policy: constant tangential B,
+  ! zero finite-volume divergence in radial ghost cells. Boundary Br is anchored.
+  ! This is not a characteristic outflow or a line-tied velocity boundary.
+  subroutine yy_ct_radial_faces(s)
+    type(state),intent(inout) :: s(max_blocks)
+    {^IFTHREED
+    integer :: n,g,side,anchor,first,last,stride,i,j,k,c,jlo,klo
+    double precision :: transverse
+    if(.not.yinyang_enabled.or.refine_max_level/=1.or.lb_automatic) &
+      call mpistop('CT radial fill requires fixed Yin-Yang mesh')
+    do n=1,igridstail
+      g=igrids(n)
+      if(.not.allocated(s(g)%ws)) call mpistop('CT radial face state missing')
+      do side=1,2
+        if(side==1.and.node(pig1_,g)/=1) cycle
+        if(side==2.and.node(pig1_,g)/=domain_nx1/block_nx1) cycle
+        anchor=ixMlo1;first=ixMlo1-1;last=ixGlo1;stride=-1
+        if(side==2) then
+          anchor=ixMhi1;first=ixMhi1+1;last=ixGhi1;stride=1
+        end if
+        ! Angular face halos at the anchor radius are already complete.
+        do c=2,3
+          jlo=ixGlo2;klo=ixGlo3
+          if(c==2) jlo=jlo-1
+          if(c==3) klo=klo-1
+          do k=klo,ixGhi3
+            do j=jlo,ixGhi2
+              do i=first,last,stride
+                s(g)%ws(i,j,k,c)=s(g)%ws(anchor,j,k,c)
+              end do
+            end do
+          end do
+        end do
+        do k=ixGlo3,ixGhi3
+          do j=ixGlo2,ixGhi2
+            do i=first,last,stride
+              transverse=s(g)%surfaceC(i,j,k,2)*s(g)%ws(i,j,k,2) &
+                -s(g)%surfaceC(i,j-1,k,2)*s(g)%ws(i,j-1,k,2) &
+                +s(g)%surfaceC(i,j,k,3)*s(g)%ws(i,j,k,3) &
+                -s(g)%surfaceC(i,j,k-1,3)*s(g)%ws(i,j,k-1,3)
+              if(side==1) then
+                s(g)%ws(i-1,j,k,1)=(s(g)%surfaceC(i,j,k,1)*s(g)%ws(i,j,k,1)+transverse) &
+                  /s(g)%surfaceC(i-1,j,k,1)
+              else
+                s(g)%ws(i,j,k,1)=(s(g)%surfaceC(i-1,j,k,1)*s(g)%ws(i-1,j,k,1)-transverse) &
+                  /s(g)%surfaceC(i,j,k,1)
+              end if
+            end do
+          end do
+        end do
+      end do
+    end do
+    }
+    {^IFONED call mpistop('CT radial fill requires 3D') }
+    {^IFTWOD call mpistop('CT radial fill requires 3D') }
+  end subroutine
+
+  ! Caller supplies mhd_ct_sync_center. Every ghost cell is visited exactly once:
+  ! x slabs, y slabs at active x, z slabs at active x/y. Angular slabs run first.
+  ! Active total energy is
+  ! unchanged; ghosts retain their prescribed thermal energy when B is replaced.
+  subroutine yy_sync_ct_state(s,sync_center)
+    type(state),intent(inout) :: s(max_blocks)
+    interface
+      subroutine sync_center(ixO^L,s,keep_pressure)
+        use mod_global_parameters
+        integer,intent(in) :: ixO^L
+        type(state),intent(inout) :: s
+        logical,intent(in) :: keep_pressure
+      end subroutine
+    end interface
+    integer :: n,g,d,side,i,anchor,ixO^L,lo(ndim),hi(ndim),amin(ndim),amax(ndim),gmin(ndim),gmax(ndim)
+    if(ndim/=3.or..not.yinyang_enabled.or.refine_max_level/=1.or.lb_automatic) &
+      call mpistop('CT state sync requires fixed 3D Yin-Yang mesh')
+    {^D& amin(^D)=ixMlo^D;amax(^D)=ixMhi^D;gmin(^D)=ixGlo^D;gmax(^D)=ixGhi^D;\}
+    do n=1,igridstail
+      g=igrids(n)
+      call sync_center(ixM^LL,s(g),.false.)
+      do d=ndim,1,-1
+        do side=1,2
+          lo=gmin;hi=gmax
+          lo(1:d-1)=amin(1:d-1);hi(1:d-1)=amax(1:d-1)
+          if(side==1) then
+            hi(d)=amin(d)-1
+          else
+            lo(d)=amax(d)+1
+          end if
+          {^IFTHREED
+          if(d==1) then
+            anchor=0
+            if(side==1.and.node(pig1_,g)==1) anchor=ixMlo1
+            if(side==2.and.node(pig1_,g)==domain_nx1/block_nx1) anchor=ixMhi1
+            if(anchor/=0) then
+              ! Copy after active and angular ghost B/energy are consistent.
+              do i=lo(1),hi(1)
+                s(g)%w(i,ixGlo2:ixGhi2,ixGlo3:ixGhi3,:)=s(g)%w(anchor,ixGlo2:ixGhi2,ixGlo3:ixGhi3,:)
+              end do
+            end if
+          end if
+          }
+          ixOmin^D=lo(^D);ixOmax^D=hi(^D);
+          call sync_center(ixO^L,s(g),.true.)
+        end do
+      end do
+    end do
+  end subroutine
+
+  ! Cache all owner angular-boundary edges, including radial endpoints.
+  subroutine yy_runtime_ct_prepare(s)
+    type(state),intent(in) :: s(max_blocks)
+    {^IFTHREED
+    integer,allocatable :: receivers(:,:)
+    integer :: pass,n,g,c,i,j,k,idx(3),gi(3),bc(3),lo(3),hi(3),bn(3),nn(3),count
+    if(runtime_patch%mesh_epoch==particle_mesh_epoch) return
+    call yy_prepare_ct_patch(runtime_patch,s)
+    call yy_prepare_ct_ghosts(runtime_ghosts,s,face_moments=yy_ct_face_moments)
+    bn=[block_nx1,block_nx2,block_nx3];nn=[domain_nx1,domain_nx2,domain_nx3]
+    hi=[ixMhi1,ixMhi2,ixMhi3]
+    do pass=1,2
+      count=0
+      do n=1,igridstail
+        g=igrids(n);bc=[node(pig1_,g)-1,node(pig2_,g)-1,node(pig3_,g)-1]
+        do c=1,3
+          lo=[ixMlo1,ixMlo2,ixMlo3]-1;lo(c)=lo(c)+1
+          do k=lo(3),hi(3)
+            do j=lo(2),hi(2)
+              do i=lo(1),hi(1)
+                idx=[i,j,k];gi=bc*bn+idx-[ixMlo1,ixMlo2,ixMlo3]
+                if(.not.((c/=2.and.(gi(2)==-1.or.gi(2)==nn(2)-1)).or. &
+                  (c/=3.and.(gi(3)==-1.or.gi(3)==nn(3)-1)))) cycle
+                if(.not.yy_ct_edge_is_owner(g,idx,c)) cycle
+                count=count+1
+                if(pass==2) receivers(:,count)=[g,idx,c]
+              end do
+            end do
+          end do
+        end do
+      end do
+      if(pass==1) allocate(receivers(5,count))
+    end do
+    call yy_prepare_ct_edges(runtime_edges,s,receivers,radial_extrapolate=.true.)
+    }
+  end subroutine
+
+  subroutine yy_runtime_ct_edges(s,fluxes)
+    type(state),intent(in) :: s(max_blocks)
+    type(ct_stage_flux),intent(inout) :: fluxes(:)
+    call yy_runtime_ct_prepare(s)
+    call yy_ordered_ct_edges(runtime_patch,runtime_edges,fluxes)
+  end subroutine
+
+  subroutine yy_runtime_ct_ghosts(s)
+    type(state),intent(inout) :: s(max_blocks)
+    if(.not.associated(phys_ct_sync_center)) call mpistop('CT variable sync procedure is missing')
+    call yy_runtime_ct_prepare(s)
+    call yy_complete_ct_faces(runtime_patch,runtime_ghosts,s)
+    call yy_sync_ct_state(s,phys_ct_sync_center)
+  end subroutine
+
+  ! Supply radial cell donors before angular primitive interpolation. Final
+  ! radial B/energy is recomputed only after all face and angular data are ready.
+  subroutine yy_ct_radial_cells(s)
+    type(state),intent(inout) :: s(max_blocks)
+    {^IFTHREED
+    integer :: n,g,side,anchor,lo,hi,i
+    do n=1,igridstail
+      g=igrids(n)
+      do side=1,2
+        if(side==1.and.node(pig1_,g)/=1) cycle
+        if(side==2.and.node(pig1_,g)/=domain_nx1/block_nx1) cycle
+        anchor=ixMlo1;lo=ixGlo1;hi=ixMlo1-1
+        if(side==2) then
+          anchor=ixMhi1;lo=ixMhi1+1;hi=ixGhi1
+        end if
+        do i=lo,hi
+          s(g)%w(i,ixGlo2:ixGhi2,ixGlo3:ixGhi3,:)=s(g)%w(anchor,ixGlo2:ixGhi2,ixGlo3:ixGhi3,:)
+        end do
+      end do
+    end do
+    }
   end subroutine
 
   ! Invalidate a previous completion record BEFORE overwriting either snapshot.
@@ -478,12 +812,24 @@ contains
   end subroutine
 
   subroutine yy_validate()
+    if(yy_ct_face_moments.and..not.yy_ct_experimental)call mpistop('face moments require experimental YY CT')
+    if(yy_ct_experimental.and..not.yinyang_enabled) call mpistop('YY CT requires yinyang coordinates')
     if(.not.yinyang_enabled) return
     {^IFTHREED
+    if(yy_ct_experimental) then
+      if(.not.stagger_grid.or.physics_type/='mhd'.or..not.ct_stage_split.or. &
+        .not.associated(phys_ct_sync_center).or..not.associated(phys_get_ct_edges).or. &
+        .not.associated(phys_apply_ct_edges)) call mpistop('YY CT needs staged classical total-energy UCT-HLL')
+      if(dimsplit.or.t_stepper/=threestep.or.t_integrator/=ssprk3.or.internalboundary) &
+        call mpistop('YY CT needs unsplit SSPRK3; no internal boundaries')
+      if(any(typeboundary(:,1:2)/=bc_cont)) call mpistop('YY CT requires continuous radial boundaries')
+    else if(stagger_grid) then
+      call mpistop('Yin-Yang CT requires explicit yy_ct_experimental=T')
+    end if
     if(refine_max_level/=1.or.lb_automatic.or.local_timestep) &
       call mpistop('yinyang v1 requires fixed level-one mesh and global time stepping')
-    if(stagger_grid.or.B0field.or.use_particles.or.use_multigrid) &
-      call mpistop('yinyang v1: CT, B0, particles and multigrid are unsupported')
+    if(B0field.or.use_particles.or.use_multigrid) &
+      call mpistop('yinyang v1: B0, particles and multigrid are unsupported')
     if(any(periodB).or.any(aperiodB)) call mpistop('yinyang has no periodic boundary')
     if(xprobmin1<=0.d0.or.xprobmin2<=0.d0.or.xprobmax2>=dpi) &
       call mpistop('yinyang requires a positive-radius shell excluding polar axes')

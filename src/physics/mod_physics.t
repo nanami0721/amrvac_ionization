@@ -89,6 +89,7 @@ module mod_physics
   ! Optional staged CT API: edge generation must not mutate either state.
   procedure(sub_update_faces), pointer :: phys_get_ct_edges => null()
   procedure(sub_apply_ct_edges), pointer :: phys_apply_ct_edges => null()
+  procedure(sub_ct_sync_center), pointer :: phys_ct_sync_center => null()
   procedure(sub_face_to_center), pointer  :: phys_face_to_center         => null()
   procedure(sub_implicit_update), pointer :: phys_implicit_update        => null()
   procedure(sub_evaluate_implicit),pointer:: phys_evaluate_implicit      => null()
@@ -387,6 +388,13 @@ module mod_physics
        double precision, intent(in) :: fE(ixI^S,sdim:3)
        type(state) :: s
      end subroutine sub_apply_ct_edges
+
+     subroutine sub_ct_sync_center(ixO^L,s,keep_pressure)
+       use mod_global_parameters
+       integer,intent(in) :: ixO^L
+       type(state),intent(inout) :: s
+       logical,intent(in) :: keep_pressure
+     end subroutine sub_ct_sync_center
 
      subroutine sub_face_to_center(ixO^L,s)
        use mod_global_parameters

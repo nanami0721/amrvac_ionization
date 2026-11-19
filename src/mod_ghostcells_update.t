@@ -401,7 +401,7 @@ contains
     use mod_boundary_conditions, only: getintbc, bc_phys
     use mod_comm_lib, only: mpistop
     use mod_timing, only: timer_open, timer_close
-    use mod_yinyang, only: yy_exchange
+    use mod_yinyang, only: yy_exchange,yy_ct_radial_cells,yy_runtime_ct_ghosts
 
     double precision, intent(in)      :: time, qdt
     type(state), target               :: psb(max_blocks)
@@ -599,7 +599,7 @@ contains
     !$OMP END PARALLEL DO
 
     ! fill physical boundary ghost cells after internal ghost-cell values exchange
-    if(bcphys) then
+    if(bcphys.and..not.yy_ct_experimental) then
       if(associated(usr_prepare_boundary)) then
         call usr_prepare_boundary(time, qdt)
       endif
@@ -617,7 +617,7 @@ contains
     if(bcphys.and.yy_radial_boundary_adjust) call yy_exchange(psb,nwstart,nwbc)
 
      ! modify normal component of magnetic field to fix divB=0 
-    if(bcphys.and.associated(phys_boundary_adjust)) then
+    if(bcphys.and.associated(phys_boundary_adjust).and..not.yy_ct_experimental) then
       !$OMP PARALLEL DO SCHEDULE(dynamic) PRIVATE(igrid)
       do iigrid=1,igridstail; igrid=igrids(iigrid);
         if(.not.phyboundblock(igrid)) cycle
@@ -626,7 +626,9 @@ contains
       !$OMP END PARALLEL DO
     end if
 
+    if(yy_ct_experimental) call yy_ct_radial_cells(psb)
     if(yinyang_enabled) call yy_exchange(psb,nwstart,nwbc)
+    if(yy_ct_experimental) call yy_runtime_ct_ghosts(psb)
 
     ! EoS work in the boundary conditions and level-jump conversions is counted under the EoS
     time_bc=time_bc+timer_close(tbc)

@@ -23,10 +23,11 @@ module mod_yinyang_ct_coupling
 contains
   ! Br is patch-invariant as a scalar; tangential components require rotation.
   ! This split permits radial wall faces without borrowing physical ghost data.
-  subroutine yy_ct_face_build(plan,comm,patch,bn,nn,radial,angular,directory,centers,directions)
+  subroutine yy_ct_face_build(plan,comm,patch,bn,nn,radial,angular,directory,centers,directions,widths)
     type(yy_ct_face_plan),intent(out) :: plan
     integer,intent(in) :: comm,patch,bn(3),nn(3),directory(:,:),directions(:)
     double precision,intent(in) :: radial(0:),angular(2,2),centers(:,:)
+    double precision,optional,intent(in) :: widths(:,:)
     double precision,allocatable :: rp(:,:),tp(:,:)
     double precision :: frame(3,3)
     integer :: n,nr,nt,ir,it,c
@@ -48,9 +49,16 @@ contains
         it=it+1;tp(:,it)=centers(:,n);plan%tslot(it)=n
       end if
     end do
-    call yy_staggered_build(plan%radial,comm,patch,yy_face_location,bn,nn,radial,angular,directory,rp, &
-      radial_scalar=.true.)
-    call yy_staggered_build(plan%tangent,comm,patch,yy_face_location,bn,nn,radial,angular,directory,tp)
+    if(present(widths))then
+      call yy_staggered_build(plan%radial,comm,patch,yy_face_location,bn,nn,radial,angular,directory,rp, &
+        face_widths=widths(:,plan%rslot),face_directions=directions(plan%rslot))
+      call yy_staggered_build(plan%tangent,comm,patch,yy_face_location,bn,nn,radial,angular,directory,tp, &
+        face_widths=widths(:,plan%tslot),face_directions=directions(plan%tslot))
+    else
+      call yy_staggered_build(plan%radial,comm,patch,yy_face_location,bn,nn,radial,angular,directory,rp, &
+        radial_scalar=.true.)
+      call yy_staggered_build(plan%tangent,comm,patch,yy_face_location,bn,nn,radial,angular,directory,tp)
+    end if
     plan%covered(plan%rslot)=plan%radial%covered
     plan%covered(plan%tslot)=plan%tangent%covered
   end subroutine
@@ -108,28 +116,45 @@ contains
     end do
   end subroutine
 
-  subroutine yy_ct_edge_build(plan,comm,patch,bn,nn,radial,angular,directory,centers,widths,directions)
+  subroutine yy_ct_edge_build(plan,comm,patch,bn,nn,radial,angular,directory,centers,widths,directions,radial_extrapolate,native_midpoint)
     type(yy_ct_edge_plan),intent(inout) :: plan
     integer,intent(in) :: comm,patch,bn(3),nn(3),directory(:,:),directions(:)
     double precision,intent(in) :: radial(0:),angular(2,2),centers(:,:),widths(:)
+    logical,optional,intent(in) :: radial_extrapolate,native_midpoint
     double precision,allocatable :: points(:,:)
     integer,allocatable :: idmap(:)
-    double precision :: pos(3,2),weights(3,2),r,step(2)
-    integer :: n,nt,c,rank,ierr,g,ig,idx,ns
+    double precision :: pos(3,2),weights(3,2),r,step(2),frame(3,3),jacobian
+    integer :: n,nt,c,rank,ierr,g,ig,idx,ns,nq
+    logical :: midpoint
     call yy_ct_edge_clear(plan)
     nt=size(directions)
     if(size(centers,1)/=3.or.size(centers,2)/=nt.or.size(widths)/=nt) &
       call edge_error(comm,'invalid receiver array shapes')
     if(any(directions<1).or.any(directions>3).or.any(widths<=0.d0).or. &
       .not.all(ieee_is_finite(widths))) call edge_error(comm,'invalid edge direction or width')
-    allocate(points(3,2*nt),plan%line_weights(3,2,nt),plan%covered(nt))
+    ! Native UCT supplies midpoint approximations, not exact line averages.
+    ! Select quadrature once at plan construction; the exchange kernel is shared.
+    midpoint=.false.;if(present(native_midpoint))midpoint=native_midpoint
+    nq=2;if(midpoint)nq=1
+    allocate(points(3,nq*nt),plan%line_weights(3,nq,nt),plan%covered(nt))
     do n=1,nt
-      call yy_ct_edge_quadrature(patch,directions(n),centers(:,n),widths(n),pos,weights)
-      points(:,2*n-1:2*n)=pos;plan%line_weights(:,:,n)=weights
+      if(midpoint)then
+        c=directions(n)
+        call yy_staggered_basis(centers(2,n),centers(3,n),patch,frame)
+        jacobian=1.d0
+        if(c==2)jacobian=centers(1,n)
+        if(c==3)jacobian=centers(1,n)*sin(centers(2,n))
+        points(:,n)=centers(:,n)
+        plan%line_weights(:,1,n)=widths(n)*jacobian*frame(:,c)
+      else
+        call yy_ct_edge_quadrature(patch,directions(n),centers(:,n),widths(n),pos,weights)
+        points(:,2*n-1:2*n)=pos;plan%line_weights(:,:,n)=weights
+      end if
     end do
-    call yy_staggered_build(plan%samples,comm,patch,yy_edge_location,bn,nn,radial,angular,directory,points)
+    call yy_staggered_build(plan%samples,comm,patch,yy_edge_location,bn,nn,radial,angular,directory,points, &
+      edge_radial_extrapolate=radial_extrapolate)
     ns=size(plan%samples%request,2)
-    allocate(plan%donor_length(ns),plan%scaled(ns),plan%vectors(3,2*nt))
+    allocate(plan%donor_length(ns),plan%scaled(ns),plan%vectors(3,nq*nt))
     call MPI_COMM_RANK(comm,rank,ierr)
     allocate(idmap(maxval(directory(4,:))));idmap=0
     do n=1,size(directory,2)
@@ -155,18 +180,20 @@ contains
     end do
     if(any(plan%donor_length<=0.d0)) call edge_error(comm,'nonpositive donor edge length')
     do n=1,nt
-      plan%covered(n)=all(plan%samples%covered(2*n-1:2*n))
+      plan%covered(n)=all(plan%samples%covered(nq*(n-1)+1:nq*n))
     end do
   end subroutine
 
   ! Donor input is the native dt*length*E_tangent. Divide only by length,
-  ! reconstruct dt*E, then integrate along the receiving edge. Zero dt is safe.
+  ! reconstruct dt*E, then apply the plan quadrature. Runtime UCT uses midpoint
+  ! quadrature on BOTH donors and receivers. Zero dt is safe.
   ! All ranks call, including those with zero receivers. No runtime allocation.
   subroutine yy_ct_edge_exchange(plan,donor_integrals,receiver_integrals)
     type(yy_ct_edge_plan),intent(inout) :: plan
     double precision,intent(in) :: donor_integrals(:)
     double precision,intent(out) :: receiver_integrals(:)
-    integer :: n,q
+    integer :: n,q,nq
+    nq=size(plan%line_weights,2)
     if(size(donor_integrals)/=size(plan%scaled).or.size(receiver_integrals)/=size(plan%covered)) &
       call edge_error(plan%samples%comm,'edge exchange shapes disagree with plan')
     plan%scaled=donor_integrals/plan%donor_length
@@ -174,9 +201,9 @@ contains
     receiver_integrals=0.d0
     do n=1,size(plan%covered)
       if(.not.plan%covered(n)) cycle
-      do q=1,2
+      do q=1,nq
         receiver_integrals(n)=receiver_integrals(n)+ &
-          dot_product(plan%line_weights(:,q,n),plan%vectors(:,2*n-2+q))
+          dot_product(plan%line_weights(:,q,n),plan%vectors(:,nq*(n-1)+q))
       end do
     end do
   end subroutine

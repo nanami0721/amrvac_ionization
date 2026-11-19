@@ -6,7 +6,7 @@ mod_basic_types.t \
 mod_advance.t mod_dt.t 		\
 mod_finite_volume.t mod_tvd.t mod_finite_difference.t \
 mod_functions_connectivity.t mod_boundary_conditions.t mod_comm_lib.t 	\
-mod_yinyang.t mod_yinyang_staggered.t mod_yinyang_ct_coupling.t mod_geometry.t mod_ghostcells_update.t mod_small_values.t  \
+mod_yinyang.t mod_yinyang_staggered.t mod_yinyang_ct_coupling.t mod_yinyang_patch_sync.t mod_geometry.t mod_ghostcells_update.t mod_small_values.t  \
 mod_fix_conserve.t mod_source.t mod_initialize.t  \
 mod_amrvac.t mod_bc_data.t mod_lookup_table.t    \
 mod_constrained_transport.t mod_multigrid_coupling.t \
@@ -905,3 +905,7 @@ mod_yinyang.o: mod_yinyang_staggered.mod
 
 mod_yinyang_ct_coupling.o: mod_yinyang_staggered.mod
 mod_yinyang.o: mod_yinyang_ct_coupling.mod
+
+mod_yinyang.o: mod_yinyang_patch_sync.mod
+
+mod_advance.o: mod_yinyang.mod

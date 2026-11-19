@@ -89,8 +89,8 @@ contains
         g=receivers(1,n);idx=receivers(2:4,n);c=receivers(5,n)
         offset=0.5d0;offset(c)=0.d0
         coord=ps(g)%x(idx(1),idx(2),idx(3),:)+offset*ps(g)%dx(idx(1),idx(2),idx(3),:)
-        call yy_ct_edge_quadrature(yy_patch,c,coord,ps(g)%dx(idx(1),idx(2),idx(3),c),pos,weight)
-        exact=scale*dt*dot_product([0.2d0,-0.3d0,0.5d0],sum(weight,dim=2))
+        call yy_basis(coord(2),coord(3),yy_patch,frame)
+        exact=scale*dt*ps(g)%dsC(idx(1),idx(2),idx(3),c)*dot_product([0.2d0,-0.3d0,0.5d0],frame(:,c))
         local(2)=max(local(2),abs(fluxes(g)%edge(idx(1),idx(2),idx(3),c)-exact))
       end do
     end do
