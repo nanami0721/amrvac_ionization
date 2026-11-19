@@ -1,5 +1,9 @@
 # Yin–Yang tests
 
+New Mac Studio / new developer: start with the repository-root
+[handoff guide](../../YINYANG_MAC_STUDIO_HANDOFF.md). It distinguishes current
+capabilities, pending CT restart/application work, and a cache-free bootstrap.
+
 See `doc/yinyang_v1.md` for scope, geometry, restart and validation details.
 Never compile or run inside this source tree. `run_validation.py` copies the
 source and MHD case to a new external directory, checks MPI/restart equivalence,

@@ -1,5 +1,9 @@
 # Experimental Yin–Yang grid v1
 
+> For the current scope freeze and a fresh-machine handoff, read
+> [Mac Studio handoff](../YINYANG_MAC_STUDIO_HANDOFF.md) first. Historical status
+> notes below are dated evidence, not the current task queue.
+
 > Recovery note (2026-11-16): the historical temporary artifacts cited below were lost during a reboot. The implementation was reconstructed from session edit records. Fresh accuracy evidence and its validation scope are in `yinyang_accuracy_diagnosis.md`; the historical six-configuration and timing statements below were not all rerun during recovery.
 
 > Development status (2026-11-17): central-gravity support and the hydrostatic
